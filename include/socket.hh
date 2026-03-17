@@ -1,5 +1,6 @@
 #pragma once
 
+#include <exception>
 #include <format>
 #include <netdb.h>
 #include <stdexcept>
@@ -38,6 +39,7 @@ public:
     }
   }
   ~Socket() { close(f_socket); }
+  operator int() { return f_socket; }
 };
 
 class UdpServer {
@@ -45,7 +47,7 @@ class UdpServer {
   Socket socket_;
   constexpr static addrinfo hints = [] {
     addrinfo h{};
-    h.ai_family   = AF_UNSPEC;
+    h.ai_family = AF_UNSPEC;
     h.ai_socktype = SOCK_DGRAM;
     h.ai_protocol = IPPROTO_UDP;
     return h;
@@ -53,5 +55,24 @@ class UdpServer {
 
 public:
   UdpServer(int port, std::string &address)
-      : addressInfo_(port, address, &hints), socket_{addressInfo_} {}
+      : addressInfo_{port, address, &hints}, socket_{addressInfo_} {
+    if (bind(socket_, addressInfo_->ai_addr, addressInfo_->ai_addrlen) != 0) {
+      throw std::bad_alloc{};
+    }
+  }
+
+  auto echo() {
+    auto buf = std::array<char, 512>{};
+    auto clientAddress = sockaddr{};
+    auto clientAddressSize = socklen_t{sizeof(clientAddress)};
+    auto r = recvfrom(socket_, buf.data(), buf.size(), 0, &clientAddress,
+                      &clientAddressSize);
+    if (r != -1) {
+      auto n =
+          sendto(socket_, buf.data(), r, 0, &clientAddress, clientAddressSize);
+      if (n < 0) {
+        throw std::bad_exception{};
+      }
+    }
+  }
 };
