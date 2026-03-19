@@ -84,7 +84,26 @@ class TcpConnection {
   TcpConnection(int fd) : fd_{fd} {}
 
 public:
-  ~TcpConnection() { close(fd_); }
+  TcpConnection() : fd_(-1) {}
+  TcpConnection(const TcpConnection &) = delete;
+  TcpConnection(TcpConnection &&o) {
+    fd_ = o.fd_;
+    o.fd_ = -1;
+  }
+  auto operator=(const TcpConnection &) = delete;
+  auto operator=(TcpConnection &&o) {
+    if (fd_ >= 0) {
+      close(fd_);
+    }
+    fd_ = o.fd_;
+    o.fd_ = -1;
+  }
+  ~TcpConnection() {
+    if (fd_ >= 0) {
+      close(fd_);
+    }
+  }
+
   auto echo() {
     auto buf = std::array<char, 512>{};
     auto r = recv(fd_, buf.data(), buf.size(), 0);
