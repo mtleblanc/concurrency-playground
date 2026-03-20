@@ -2,12 +2,16 @@
 
 #include <exception>
 #include <format>
+#include <map>
 #include <netdb.h>
+#include <poll.h>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <vector>
 
 class AddressInfo {
   addrinfo *addressInfo_;
@@ -142,5 +146,55 @@ public:
   auto accept() {
     auto fd = ::accept(socket_, nullptr, nullptr);
     return TcpConnection{fd};
+  }
+};
+
+template <typename Action> struct Monitor {
+  int fd_;
+  std::optional<Action> readReady_;
+  std::optional<Action> writeReady_;
+};
+
+template <typename Action> class Multiplex {
+  std::map<int, Monitor<Action>> sockets_{};
+  std::vector<pollfd> fds_{};
+
+public:
+  auto add(Monitor<Action> m) {
+    auto fd = m.fd_;
+    auto [_, succ] = sockets_.insert({m.fd_, std::move(m)});
+    if (!succ) {
+      throw std::invalid_argument{"fd already in watch set"};
+    }
+    fds_.push_back({m.fd_});
+    if (m.readReady) {
+      fds_.back().events |= POLLIN;
+    }
+    if (m.writeReady) {
+      fds_.back().events |= POLLOUT;
+    }
+  }
+
+  void doPoll() {
+    auto n = poll(fds_.data(), fds_.size(), -1);
+    if (n <= 0) {
+      return;
+    }
+    auto ready = [](const auto &fd) { return fd.revents != 0; };
+    for (const auto &fd : fds_ | std::views::filter(ready)) {
+      auto monitor = sockets_.at(fd.fd);
+      if (fd.revents & POLLIN) {
+        *monitor.readReady();
+      }
+      if (fd.revents & POLLOUT) {
+        *monitor.writeReady();
+      }
+    }
+  }
+
+  void run() {
+    for (;;) {
+      doPoll();
+    }
   }
 };
