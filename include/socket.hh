@@ -42,7 +42,7 @@ public:
     }
   }
   ~Socket() { close(f_socket); }
-  operator int() { return f_socket; }
+  operator int() const { return f_socket; }
 };
 
 class UdpServer {
@@ -108,6 +108,7 @@ public:
     }
   }
 
+  [[nodiscard]] int fd() const { return fd_; }
   auto echo() {
     auto buf = std::array<char, 512>{};
     auto r = recv(fd_, buf.data(), buf.size(), 0);
@@ -143,6 +144,8 @@ public:
     }
   }
 
+  int fd() const { return socket_; }
+
   auto accept() {
     auto fd = ::accept(socket_, nullptr, nullptr);
     return TcpConnection{fd};
@@ -151,8 +154,8 @@ public:
 
 template <typename Action> struct Monitor {
   int fd_;
-  std::optional<Action> readReady_;
-  std::optional<Action> writeReady_;
+  std::optional<Action> readReady;
+  std::optional<Action> writeReady;
 };
 
 template <typename Action> class Multiplex {
@@ -166,7 +169,7 @@ public:
     if (!succ) {
       throw std::invalid_argument{"fd already in watch set"};
     }
-    fds_.push_back({m.fd_});
+    fds_.push_back({fd, 0, 0});
     if (m.readReady) {
       fds_.back().events |= POLLIN;
     }
@@ -184,10 +187,10 @@ public:
     for (const auto &fd : fds_ | std::views::filter(ready)) {
       auto monitor = sockets_.at(fd.fd);
       if (fd.revents & POLLIN) {
-        *monitor.readReady();
+        (*monitor.readReady)();
       }
       if (fd.revents & POLLOUT) {
-        *monitor.writeReady();
+        (*monitor.writeReady)();
       }
     }
   }
