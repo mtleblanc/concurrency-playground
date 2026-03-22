@@ -1,5 +1,6 @@
 #include "socket.hh"
 #include <functional>
+#include <memory>
 #include <print>
 
 auto process(TcpConnection conn) {
@@ -9,11 +10,10 @@ auto process(TcpConnection conn) {
 }
 
 class EchoConnection {
-  TcpConnection *conn_;
+  std::shared_ptr<TcpConnection> conn_;
 
 public:
-  EchoConnection(TcpConnection *conn) : conn_{conn} {}
-  EchoConnection(TcpConnection &conn) : conn_{&conn} {}
+  EchoConnection(std::shared_ptr<TcpConnection> conn) : conn_{conn} {}
   void operator()() { conn_->echo(); }
 };
 
@@ -30,14 +30,12 @@ int main() {
   //
   using Action = std::function<void()>;
   auto multiplex = Multiplex<Action>{};
-  auto connections = std::vector<TcpConnection>{};
   auto echoConnections = std::vector<EchoConnection>{};
   auto serverRead = [&]() {
-    connections.push_back(server.accept());
-    echoConnections.emplace_back(connections.back());
-    auto connectionMonitor =
-        Monitor<Action>{connections.back().fd(),
-                        std::optional{echoConnections.back()}, std::nullopt};
+    auto conn = std::make_shared<TcpConnection>(server.accept());
+    echoConnections.emplace_back(conn);
+    auto connectionMonitor = Monitor<Action>{
+        conn->fd(), std::optional{echoConnections.back()}, std::nullopt};
     multiplex.add(std::move(connectionMonitor));
   };
   multiplex.add(

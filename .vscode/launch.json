@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug main",
+      "type": "codelldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/build-debug/src/main",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "stopOnEntry": false
+    }
+  ]
+}

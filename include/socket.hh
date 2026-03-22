@@ -1,10 +1,12 @@
 #pragma once
 
+#include <cstring>
 #include <exception>
 #include <format>
 #include <map>
 #include <netdb.h>
 #include <poll.h>
+#include <print>
 #include <ranges>
 #include <stdexcept>
 #include <string>
@@ -117,6 +119,10 @@ public:
       if (n < 0) {
         throw std::bad_exception{};
       }
+    } else {
+      auto errorCode = errno;
+      auto msg = strerror_r(errno, buf.data(), buf.size());
+      std::print("Error reading fd {}, {}: {}", fd_, errorCode, msg);
     }
   }
 };
@@ -184,7 +190,9 @@ public:
       return;
     }
     auto ready = [](const auto &fd) { return fd.revents != 0; };
-    for (const auto &fd : fds_ | std::views::filter(ready)) {
+    auto readyFds =
+        std::ranges::to<std::vector>(fds_ | std::views::filter(ready));
+    for (const auto &fd : readyFds) {
       auto monitor = sockets_.at(fd.fd);
       if (fd.revents & POLLIN) {
         (*monitor.readReady)();
