@@ -3,7 +3,9 @@
 #include <cstring>
 #include <exception>
 #include <format>
+#include <functional>
 #include <map>
+#include <memory>
 #include <netdb.h>
 #include <poll.h>
 #include <print>
@@ -158,15 +160,20 @@ public:
   }
 };
 
+template <typename Action> class Multiplex;
 template <typename Action> struct Monitor {
   int fd_;
   std::optional<Action> readReady;
   std::optional<Action> writeReady;
+  Multiplex<Action> *mp;
+  int index_;
+  Monitor(int fd, int index) : fd_{fd}, index_{index} {}
 };
 
 template <typename Action> class Multiplex {
   std::map<int, Monitor<Action>> sockets_{};
   std::vector<pollfd> fds_{};
+  std::vector<pollfd> toAdd{};
 
 public:
   auto add(Monitor<Action> m) {
@@ -175,30 +182,34 @@ public:
     if (!succ) {
       throw std::invalid_argument{"fd already in watch set"};
     }
-    fds_.push_back({fd, 0, 0});
+    toAdd.push_back({fd, 0, 0});
     if (m.readReady) {
-      fds_.back().events |= POLLIN;
+      toAdd.back().events |= POLLIN;
     }
     if (m.writeReady) {
-      fds_.back().events |= POLLOUT;
+      toAdd.back().events |= POLLOUT;
     }
   }
 
   void doPoll() {
+    fds_.insert(fds_.end(), toAdd.begin(), toAdd.end());
+    toAdd.clear();
     auto n = poll(fds_.data(), fds_.size(), -1);
     if (n <= 0) {
       return;
     }
     auto ready = [](const auto &fd) { return fd.revents != 0; };
-    auto readyFds =
-        std::ranges::to<std::vector>(fds_ | std::views::filter(ready));
-    for (const auto &fd : readyFds) {
+    for (auto &fd : fds_ | std::views::filter(ready)) {
       auto monitor = sockets_.at(fd.fd);
       if (fd.revents & POLLIN) {
-        (*monitor.readReady)();
+        if (!monitor.readReady || !(*monitor.readReady)()) {
+          fd &= ~POLLIN;
+        }
       }
       if (fd.revents & POLLOUT) {
-        (*monitor.writeReady)();
+        if (!monitor.writeReady || !(*monitor.writeReady)()) {
+          fd &= ~POLLOUT;
+        }
       }
     }
   }
@@ -208,4 +219,76 @@ public:
       doPoll();
     }
   }
+};
+
+class TcpAsio {
+  using ReadFunction = std::function<void(std::string &)>;
+  using WriteFunction = std::function<void()>;
+  using ReadyFunction = std::function<bool()>;
+
+  Multiplex<ReadyFunction> multiplex;
+  class Reader {
+    ReadFunction f;
+    std::shared_ptr<TcpConnection> conn;
+
+  public:
+    Reader(ReadFunction f, std::shared_ptr<TcpConnection> conn)
+        : f{std::move(f)}, conn{std::move(conn)} {}
+    bool operator()() {
+      std::string data(512, '\0');
+      auto read = ::read(conn->fd(), data.data(), data.size());
+      if (read < 0) {
+        throw errno;
+      }
+      data.resize(read);
+      f(data);
+      return false;
+    }
+  };
+  class Writer {
+    WriteFunction f;
+    std::string data_;
+    std::string_view remaining;
+    std::shared_ptr<TcpConnection> conn;
+
+  public:
+    Writer(WriteFunction f, std::string data,
+           std::shared_ptr<TcpConnection> conn)
+        : f{std::move(f)}, data_{std::move(data)}, remaining{data},
+          conn{std::move(conn)} {}
+    bool operator()() {
+      auto written = ::write(conn->fd(), remaining.data(), remaining.size());
+      if (written < 0) {
+        throw errno;
+      }
+      if (written < std::ssize(remaining)) {
+        remaining = remaining.substr(written);
+        return true;
+      }
+      f();
+      return false;
+    }
+  };
+
+public:
+  class Conn {
+    Monitor<ReadyFunction> *mon;
+    std::shared_ptr<TcpConnection> conn;
+
+  public:
+    void read(ReadFunction f) {
+      if (!mon->readReady) {
+        throw std::logic_error{"already pending read"};
+      }
+      mon->readReady = Reader(std::move(f), conn);
+      mon->enableRead();
+    }
+    void write(std::string data, WriteFunction f) {
+      if (!mon->writeReady) {
+        throw std::logic_error{"already pending write"};
+      }
+      mon->writeReady = Writer(std::move(f), std::move(data), conn);
+      mon->enableWrite();
+    }
+  };
 };
