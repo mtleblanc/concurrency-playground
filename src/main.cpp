@@ -1,46 +1,36 @@
 #include "socket.hh"
 #include <functional>
-#include <memory>
 #include <print>
 
-auto process(TcpConnection conn) {
-  while (1) {
-    conn.echo();
-  }
-}
-
 class EchoConnection {
-  std::shared_ptr<TcpConnection> conn_;
+  TcpAsio::Conn *conn_;
+
+  void echo(std::string data) {
+    conn_->write(data, [&]() {
+      conn_->read([&](auto data) { echo(std::move(data)); });
+    });
+  }
 
 public:
-  EchoConnection(std::shared_ptr<TcpConnection> conn) : conn_{conn} {}
-  void operator()() { conn_->echo(); }
+  EchoConnection(TcpAsio::Conn *conn) : conn_{conn} {
+    conn_->read([&](auto data) { echo(std::move(data)); });
+  }
 };
 
 int main() {
   std::println("concurrency playground");
   auto address = std::string{"0.0.0.0"};
-  auto server = TcpServer{address, 12345};
-
-  // while (1) {
-  //   auto conn = server.accept();
-  //   auto t = std::thread{process, std::move(conn)};
-  //   t.detach();
-  // }
-  //
-  using Action = std::function<void()>;
-  auto multiplex = Multiplex<Action>{};
-  auto echoConnections = std::vector<EchoConnection>{};
-  auto serverRead = [&]() {
-    auto conn = std::make_shared<TcpConnection>(server.accept());
-    echoConnections.emplace_back(conn);
-    auto connectionMonitor = Monitor<Action>{
-        conn->fd(), std::optional{echoConnections.back()}, std::nullopt};
-    multiplex.add(std::move(connectionMonitor));
-  };
-  multiplex.add(
-      Monitor<Action>{server.fd(), std::optional{serverRead}, std::nullopt});
-  while (1) {
-    multiplex.run();
-  }
+  auto server = std::make_unique<TcpServer>(address, 12345);
+  auto connections = std::vector<std::unique_ptr<TcpAsio::Conn>>{};
+  auto echoConnections = std::vector<std::unique_ptr<EchoConnection>>{};
+  auto multiplexServer =
+      TcpAsio::Server{std::move(server), [&](auto conn) {
+                        auto connp =
+                            std::make_unique<TcpAsio::Conn>(std::move(conn));
+                        connections.emplace_back(std::move(connp));
+                        auto c = connections.back().get();
+                        auto ec = std::make_unique<EchoConnection>(c);
+                        echoConnections.emplace_back(std::move(ec));
+                      }};
+  multiplexServer.run();
 }
