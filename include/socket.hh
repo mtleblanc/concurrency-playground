@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstring>
-#include <exception>
 #include <format>
 #include <functional>
 #include <map>
@@ -14,129 +13,87 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 class AddressInfo {
-  addrinfo *addressInfo_;
+  addrinfo *addressInfo_{};
 
 public:
+  AddressInfo() {}
   AddressInfo(std::string &address, int port, const addrinfo *hints = nullptr) {
     auto decimal_port = std::to_string(port);
-    if (getaddrinfo(address.data(), decimal_port.data(), hints,
-                    &addressInfo_) != 0 ||
+    if (::getaddrinfo(address.data(), decimal_port.data(), hints,
+                      &addressInfo_) != 0 ||
         addressInfo_ == NULL) {
       throw std::invalid_argument(
           std::format("invalid address or port: \"{}:{}\"", address, port));
     }
   }
   AddressInfo(const AddressInfo &) = delete;
-  AddressInfo(AddressInfo &&) = delete;
+  AddressInfo(AddressInfo &&o)
+      : addressInfo_{std::exchange(o.addressInfo_, nullptr)} {}
   AddressInfo &operator=(const AddressInfo &) = delete;
-  AddressInfo &operator=(AddressInfo &&) = delete;
-  ~AddressInfo() { freeaddrinfo(addressInfo_); }
+  AddressInfo &operator=(AddressInfo &&o) {
+    if (this != &o) {
+      release();
+      addressInfo_ = std::exchange(o.addressInfo_, nullptr);
+    }
+    return *this;
+  };
+  ~AddressInfo() { release(); }
 
-  auto operator->() { return addressInfo_; }
+  auto *operator*() { return addressInfo_; }
+  auto *operator->() { return addressInfo_; }
+
+private:
+  void release() {
+    if (addressInfo_ != nullptr) {
+      ::freeaddrinfo(addressInfo_);
+    }
+    addressInfo_ = nullptr;
+  }
 };
 
 class Socket {
-  int f_socket;
+  int fd_{-1};
 
 public:
-  Socket(AddressInfo *addressInfo, int type, int proto) {
-    f_socket = socket((*addressInfo)->ai_family, type, proto);
-    if (f_socket == -1) {
+  Socket() {}
+  Socket(int fd) : fd_{fd} {}
+  Socket(int domain, int type, int proto) {
+    fd_ = ::socket(domain, type, proto);
+    if (fd_ == -1) {
       throw std::bad_alloc();
     }
   }
-  ~Socket() { close(f_socket); }
-  operator int() const { return f_socket; }
-};
-
-// class UdpServer {
-//   AddressInfo addressInfo_;
-//   Socket socket_;
-//   constexpr static addrinfo hints = [] {
-//     addrinfo h{};
-//     h.ai_family = AF_UNSPEC;
-//     h.ai_socktype = SOCK_DGRAM;
-//     h.ai_protocol = IPPROTO_UDP;
-//     return h;
-//   }();
-//
-// public:
-//   UdpServer(std::string &address, int port)
-//       : addressInfo_{address, port, &hints},
-//         socket_{addressInfo_, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP} {
-//     if (bind(socket_, addressInfo_->ai_addr, addressInfo_->ai_addrlen) != 0)
-//     {
-//       throw std::bad_alloc{};
-//     }
-//   }
-//
-//   auto echo() {
-//     auto buf = std::array<char, 512>{};
-//     auto clientAddress = sockaddr{};
-//     auto clientAddressSize = socklen_t{sizeof(clientAddress)};
-//     auto r = recvfrom(socket_, buf.data(), buf.size(), 0, &clientAddress,
-//                       &clientAddressSize);
-//     if (r != -1) {
-//       auto n =
-//           sendto(socket_, buf.data(), r, 0, &clientAddress,
-//           clientAddressSize);
-//       if (n < 0) {
-//         throw std::bad_exception{};
-//       }
-//     }
-//   }
-// };
-
-class TcpServer;
-class TcpConnection {
-  int fd_;
-  friend class TcpServer;
-
-public:
-  TcpConnection(int fd) : fd_{fd} {}
-  TcpConnection() : fd_(-1) {}
-  TcpConnection(const TcpConnection &) = delete;
-  TcpConnection(TcpConnection &&o) {
-    fd_ = o.fd_;
-    o.fd_ = -1;
-  }
-  auto operator=(const TcpConnection &) = delete;
-  auto operator=(TcpConnection &&o) {
-    if (fd_ >= 0) {
-      close(fd_);
+  Socket(const Socket &) = delete;
+  Socket(Socket &&o) : fd_{std::exchange(o.fd_, -1)} {}
+  Socket &operator=(const Socket &) = delete;
+  Socket &operator=(Socket &&o) {
+    if (this != &o) {
+      release();
+      fd_ = std::exchange(o.fd_, -1);
     }
-    fd_ = o.fd_;
-    o.fd_ = -1;
-  }
-  ~TcpConnection() {
-    if (fd_ >= 0) {
-      close(fd_);
-    }
-  }
+    return *this;
+  };
+  ~Socket() { release(); }
 
-  [[nodiscard]] int fd() const { return fd_; }
-  auto echo() {
-    auto buf = std::array<char, 512>{};
-    auto r = recv(fd_, buf.data(), buf.size(), 0);
-    if (r != -1) {
-      auto n = send(fd_, buf.data(), r, 0);
-      if (n < 0) {
-        throw std::bad_exception{};
-      }
-    } else {
-      auto errorCode = errno;
-      auto msg = strerror_r(errno, buf.data(), buf.size());
-      std::print("Error reading fd {}, {}: {}", fd_, errorCode, msg);
+  operator int() const { return fd_; }
+  auto fd() const { return fd_; }
+
+private:
+  void release() {
+    if (fd_ != -1) {
+      ::close(fd_);
     }
+    fd_ = -1;
   }
 };
 
 class TcpServer {
-  std::unique_ptr<AddressInfo> addressInfo_;
-  std::unique_ptr<Socket> socket_;
+  AddressInfo addressInfo_;
+  Socket socket_;
   constexpr static addrinfo hints = [] {
     addrinfo h{};
     h.ai_family = AF_UNSPEC;
@@ -147,83 +104,81 @@ class TcpServer {
 
 public:
   TcpServer(std::string &address, int port)
-      : addressInfo_{std::make_unique<AddressInfo>(address, port, &hints)},
-        socket_{std::make_unique<Socket>(
-            addressInfo_.get(), SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP)} {
-    if (bind(*socket_, (*addressInfo_)->ai_addr, (*addressInfo_)->ai_addrlen) !=
-        0) {
+      : addressInfo_{address, port, &hints},
+        socket_{addressInfo_->ai_family, SOCK_STREAM | SOCK_CLOEXEC,
+                IPPROTO_TCP} {
+    if (::bind(socket_, addressInfo_->ai_addr, addressInfo_->ai_addrlen)) {
       throw std::bad_alloc{};
     }
-    if (listen(*socket_, 0) != 0) {
+    if (::listen(socket_, 0)) {
       throw std::bad_alloc{};
     }
   }
 
-  int fd() const { return *socket_; }
-
-  auto accept() {
-    auto fd = ::accept(*socket_, nullptr, nullptr);
-    return std::make_shared<TcpConnection>(fd);
+  int fd() const { return socket_; }
+  auto accept() const {
+    return std::make_shared<Socket>(::accept(socket_, nullptr, nullptr));
   }
 };
 
-template <typename Action> class Monitor;
-template <typename Action> class Multiplex;
+class Monitor;
+class Multiplex;
 
-template <typename Action> class Monitor {
+class Monitor {
+  using Action = std::function<bool()>;
   int fd_;
-  Multiplex<Action> *mp_;
+  Multiplex *mp_;
   std::optional<Action> readReady_;
   std::optional<Action> writeReady_;
-  friend class Multiplex<Action>;
+  friend class Multiplex;
 
 public:
-  Monitor(int fd, Multiplex<Action> *mp) : fd_{fd}, mp_{mp} {}
+  Monitor(int fd, Multiplex *mp) : fd_{fd}, mp_{mp} {}
   void onRead(Action f);
   void onWrite(Action f);
   void completeRead();
   void completeWrite();
 };
 
-template <typename Action> class Multiplex {
-  std::map<int, Monitor<Action>> sockets_{};
+class Multiplex {
+  std::map<int, Monitor> sockets_{};
   std::map<int, int> fdToIndex_{};
   std::vector<pollfd> fds_{};
 
 public:
   void doPoll();
   void run();
-  Monitor<Action> *monitor(int fd);
+  Monitor *monitor(int fd);
   void enableRead(int fd);
   void enableWrite(int fd);
   void disableRead(int fd);
   void disableWrite(int fd);
 };
 
-template <typename Action> void Monitor<Action>::onRead(Action f) {
+inline void Monitor::onRead(Action f) {
   if (readReady_) {
     throw std::logic_error{"read already pending"};
   }
   readReady_ = std::move(f);
   mp_->enableRead(fd_);
 }
-template <typename Action> void Monitor<Action>::onWrite(Action f) {
+inline void Monitor::onWrite(Action f) {
   if (writeReady_) {
     throw std::logic_error{"write already pending"};
   }
   writeReady_ = std::move(f);
   mp_->enableWrite(fd_);
 }
-template <typename Action> void Monitor<Action>::completeRead() {
+void Monitor::completeRead() {
   mp_->disableRead(fd_);
   readReady_ = {};
 }
-template <typename Action> void Monitor<Action>::completeWrite() {
+void Monitor::completeWrite() {
   mp_->disableWrite(fd_);
   writeReady_ = {};
 }
 
-template <typename Action> void Multiplex<Action>::doPoll() {
+void Multiplex::doPoll() {
   auto n = poll(fds_.data(), fds_.size(), -1);
   if (n <= 0) {
     return;
@@ -245,32 +200,32 @@ template <typename Action> void Multiplex<Action>::doPoll() {
   }
 }
 
-template <typename Action> void Multiplex<Action>::run() {
+inline void Multiplex::run() {
   for (;;) {
     doPoll();
   }
 }
 
-template <typename Action> Monitor<Action> *Multiplex<Action>::monitor(int fd) {
-  sockets_.emplace(fd, Monitor<Action>{fd, this});
+inline Monitor *Multiplex::monitor(int fd) {
+  sockets_.emplace(fd, Monitor{fd, this});
   fds_.emplace_back(fd, 0, 0);
   fdToIndex_.emplace(fd, fds_.size() - 1);
   return &sockets_.at(fd);
 }
 
-template <typename Action> void Multiplex<Action>::enableRead(int fd) {
+inline void Multiplex::enableRead(int fd) {
   fds_[fdToIndex_[fd]].events |= POLLIN;
 }
 
-template <typename Action> void Multiplex<Action>::enableWrite(int fd) {
+inline void Multiplex::enableWrite(int fd) {
   fds_[fdToIndex_[fd]].events |= POLLOUT;
 }
 
-template <typename Action> void Multiplex<Action>::disableRead(int fd) {
+inline void Multiplex::disableRead(int fd) {
   fds_[fdToIndex_[fd]].events &= ~POLLIN;
 }
 
-template <typename Action> void Multiplex<Action>::disableWrite(int fd) {
+inline void Multiplex::disableWrite(int fd) {
   fds_[fdToIndex_[fd]].events &= ~POLLOUT;
 }
 
@@ -279,13 +234,13 @@ class TcpAsio {
   using WriteFunction = std::function<void()>;
   using ReadyFunction = std::function<bool()>;
 
-  Multiplex<ReadyFunction> multiplex;
+  Multiplex multiplex;
   class Reader {
     ReadFunction f;
-    std::shared_ptr<TcpConnection> conn;
+    std::shared_ptr<Socket> conn;
 
   public:
-    Reader(ReadFunction f, std::shared_ptr<TcpConnection> conn)
+    Reader(ReadFunction f, std::shared_ptr<Socket> conn)
         : f{std::move(f)}, conn{std::move(conn)} {}
     bool operator()() {
       std::string data(512, '\0');
@@ -302,11 +257,10 @@ class TcpAsio {
     WriteFunction f;
     std::string data_;
     std::string_view remaining;
-    std::shared_ptr<TcpConnection> conn;
+    std::shared_ptr<Socket> conn;
 
   public:
-    Writer(WriteFunction f, std::string data,
-           std::shared_ptr<TcpConnection> conn)
+    Writer(WriteFunction f, std::string data, std::shared_ptr<Socket> conn)
         : f{std::move(f)}, data_{std::move(data)}, remaining{data},
           conn{std::move(conn)} {}
     bool operator()() {
@@ -325,12 +279,11 @@ class TcpAsio {
 
 public:
   class Conn {
-    Monitor<ReadyFunction> *mon;
-    std::shared_ptr<TcpConnection> conn;
+    Monitor *mon;
+    std::shared_ptr<Socket> conn;
 
   public:
-    Conn(Monitor<ReadyFunction> *mon, std::shared_ptr<TcpConnection> conn)
-        : mon{mon}, conn{conn} {}
+    Conn(Monitor *mon, std::shared_ptr<Socket> conn) : mon{mon}, conn{conn} {}
     void read(ReadFunction f) { mon->onRead(Reader(std::move(f), conn)); }
     void write(std::string data, WriteFunction f) {
       mon->onWrite(Writer(std::move(f), std::move(data), conn));
@@ -339,13 +292,14 @@ public:
 
   class Server {
     std::unique_ptr<TcpServer> server_;
-    Multiplex<ReadyFunction> mp;
-    Monitor<ReadyFunction> *serverMonitor_;
+    Multiplex mp;
+    Monitor *serverMonitor_;
 
   public:
     Server(std::unique_ptr<TcpServer> server,
            std::function<void(Conn)> onAccept)
-        : server_{std::move(server)}, serverMonitor_{mp.monitor(server->fd())} {
+        : server_{std::move(server)},
+          serverMonitor_{mp.monitor(server_->fd())} {
       serverMonitor_->onRead([&]() {
         auto conn = server->accept();
         auto mon = mp.monitor(conn->fd());
