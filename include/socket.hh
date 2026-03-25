@@ -134,10 +134,15 @@ class Monitor {
 
 public:
   Monitor(int fd, Multiplex *mp) : fd_{fd}, mp_{mp} {}
+  Monitor(const Monitor&) = delete;
+  Monitor(Monitor&&) = default;
+  Monitor& operator=(const Monitor&) = delete;
+  Monitor& operator=(Monitor&&) = default;
+  ~Monitor() = default;
   void onRead(Action f);
   void onWrite(Action f);
-  void completeRead();
-  void completeWrite();
+  void doRead();
+  void doWrite();
 };
 
 class Multiplex {
@@ -169,16 +174,20 @@ inline void Monitor::onWrite(Action f) {
   writeReady_ = std::move(f);
   mp_->enableWrite(fd_);
 }
-void Monitor::completeRead() {
-  mp_->disableRead(fd_);
-  readReady_ = {};
+inline void Monitor::doRead() {
+  if (!readReady_ || !(*readReady_)()) {
+    mp_->disableRead(fd_);
+    readReady_ = {};
+  }
 }
-void Monitor::completeWrite() {
-  mp_->disableWrite(fd_);
-  writeReady_ = {};
+inline void Monitor::doWrite() {
+  if (!writeReady_ || !(*writeReady_)()) {
+    mp_->disableWrite(fd_);
+    writeReady_ = {};
+  }
 }
 
-void Multiplex::doPoll() {
+inline void Multiplex::doPoll() {
   auto n = poll(fds_.data(), fds_.size(), -1);
   if (n <= 0) {
     return;
@@ -186,16 +195,12 @@ void Multiplex::doPoll() {
   auto N = std::ssize(fds_);
   for (auto i = 0; i < N; ++i) {
     auto &fd = fds_[i];
-    auto monitor = sockets_.at(fd.fd);
+    auto& monitor = sockets_.at(fd.fd);
     if (fd.revents & POLLIN) {
-      if (!monitor.readReady_ || !(*monitor.readReady_)()) {
-        fd.events &= ~POLLIN;
-      }
+      monitor.doRead();
     }
     if (fd.revents & POLLOUT) {
-      if (!monitor.writeReady_ || !(*monitor.writeReady_)()) {
-        fd.events &= ~POLLOUT;
-      }
+      monitor.doWrite();
     }
   }
 }
@@ -256,20 +261,22 @@ class TcpAsio {
   class Writer {
     WriteFunction f;
     std::string data_;
-    std::string_view remaining;
+    int index{};
     std::shared_ptr<Socket> conn;
 
   public:
     Writer(WriteFunction f, std::string data, std::shared_ptr<Socket> conn)
-        : f{std::move(f)}, data_{std::move(data)}, remaining{data},
+        : f{std::move(f)}, data_{std::move(data)},
           conn{std::move(conn)} {}
     bool operator()() {
+      auto remaining = std::string_view{data_};
+      remaining = remaining.substr(index);
       auto written = ::write(conn->fd(), remaining.data(), remaining.size());
       if (written < 0) {
         throw errno;
       }
       if (written < std::ssize(remaining)) {
-        remaining = remaining.substr(written);
+        index += written;
         return true;
       }
       f();
@@ -291,20 +298,20 @@ public:
   };
 
   class Server {
-    std::unique_ptr<TcpServer> server_;
+    TcpServer server_;
     Multiplex mp;
     Monitor *serverMonitor_;
+    std::function<void(Conn)> onAccept_;
 
   public:
-    Server(std::unique_ptr<TcpServer> server,
-           std::function<void(Conn)> onAccept)
-        : server_{std::move(server)},
-          serverMonitor_{mp.monitor(server_->fd())} {
+    Server(TcpServer server, std::function<void(Conn)> onAccept)
+        : server_{std::move(server)}, serverMonitor_{mp.monitor(server_.fd())},
+          onAccept_{std::move(onAccept)} {
       serverMonitor_->onRead([&]() {
-        auto conn = server->accept();
+        auto conn = server_.accept();
         auto mon = mp.monitor(conn->fd());
         auto conn2 = Conn{mon, conn};
-        onAccept(std::move(conn2));
+        onAccept_(std::move(conn2));
         return true;
       });
     }

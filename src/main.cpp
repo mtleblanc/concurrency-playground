@@ -20,7 +20,7 @@ public:
 int main() {
   std::println("concurrency playground");
   auto address = std::string{"0.0.0.0"};
-  auto server = std::make_unique<TcpServer>(address, 12345);
+  auto server = TcpServer{address, 12345};
   auto connections = std::vector<std::unique_ptr<TcpAsio::Conn>>{};
   auto echoConnections = std::vector<std::unique_ptr<EchoConnection>>{};
   auto multiplexServer =
