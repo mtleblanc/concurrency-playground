@@ -1,3 +1,4 @@
+#include "coroutine.hh"
 #include "socket.hh"
 #include <functional>
 #include <print>
@@ -30,8 +31,7 @@ public:
   }
 };
 
-int main() {
-  std::println("concurrency playground");
+[[maybe_unused]] void runProactor() {
   auto address = std::string{"0.0.0.0"};
   auto server = TcpServer{address, 12345};
   auto connections = std::vector<std::unique_ptr<TcpAsio::Conn>>{};
@@ -46,4 +46,9 @@ int main() {
                         echoConnections.emplace_back(std::move(ec));
                       }};
   multiplexServer.run();
+}
+AsioCoroutine coro() { co_return; }
+int main() {
+  std::println("concurrency playground");
+  coro();
 }
