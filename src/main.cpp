@@ -6,14 +6,27 @@ class EchoConnection {
   TcpAsio::Conn *conn_;
 
   void echo(std::string data) {
-    conn_->write(data, [&]() {
-      conn_->read([&](auto data) { echo(std::move(data)); });
+    conn_->write(std::move(data), [&](auto res) {
+      if (res) {
+        return;
+      }
+      conn_->read([&](auto res, auto data) {
+        if (res) {
+          return;
+        }
+        echo(std::move(data));
+      });
     });
   }
 
 public:
   EchoConnection(TcpAsio::Conn *conn) : conn_{conn} {
-    conn_->read([&](auto data) { echo(std::move(data)); });
+    conn_->read([&](auto res, auto data) {
+      if (res) {
+        return;
+      }
+      echo(std::move(data));
+    });
   }
 };
 

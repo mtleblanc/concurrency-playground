@@ -134,10 +134,10 @@ class Monitor {
 
 public:
   Monitor(int fd, Multiplex *mp) : fd_{fd}, mp_{mp} {}
-  Monitor(const Monitor&) = delete;
-  Monitor(Monitor&&) = default;
-  Monitor& operator=(const Monitor&) = delete;
-  Monitor& operator=(Monitor&&) = default;
+  Monitor(const Monitor &) = delete;
+  Monitor(Monitor &&) = default;
+  Monitor &operator=(const Monitor &) = delete;
+  Monitor &operator=(Monitor &&) = default;
   ~Monitor() = default;
   void onRead(Action f);
   void onWrite(Action f);
@@ -195,7 +195,7 @@ inline void Multiplex::doPoll() {
   auto N = std::ssize(fds_);
   for (auto i = 0; i < N; ++i) {
     auto &fd = fds_[i];
-    auto& monitor = sockets_.at(fd.fd);
+    auto &monitor = sockets_.at(fd.fd);
     if (fd.revents & POLLIN) {
       monitor.doRead();
     }
@@ -234,9 +234,27 @@ inline void Multiplex::disableWrite(int fd) {
   fds_[fdToIndex_[fd]].events &= ~POLLOUT;
 }
 
+class Result {
+
+public:
+  enum class Type {
+    ok,
+    err,
+  };
+  constexpr Result(Type type = Type::ok, int ec = 0) : type_{type}, ec_{ec} {}
+  constexpr operator bool() const { return type_ != Type::ok; }
+  constexpr int errorNumber() const { return ec_; }
+
+  static constexpr auto Ok() { return Result{}; }
+
+private:
+  Type type_;
+  int ec_;
+};
+
 class TcpAsio {
-  using ReadFunction = std::function<void(std::string &)>;
-  using WriteFunction = std::function<void()>;
+  using ReadFunction = std::function<void(Result, std::string &)>;
+  using WriteFunction = std::function<void(Result)>;
   using ReadyFunction = std::function<bool()>;
 
   Multiplex multiplex;
@@ -251,10 +269,11 @@ class TcpAsio {
       std::string data(512, '\0');
       auto read = ::read(conn->fd(), data.data(), data.size());
       if (read < 0) {
-        throw errno;
+        f(Result{Result::Type::err, errno}, data);
+        return false;
       }
       data.resize(read);
-      f(data);
+      f(Result::Ok(), data);
       return false;
     }
   };
@@ -266,20 +285,20 @@ class TcpAsio {
 
   public:
     Writer(WriteFunction f, std::string data, std::shared_ptr<Socket> conn)
-        : f{std::move(f)}, data_{std::move(data)},
-          conn{std::move(conn)} {}
+        : f{std::move(f)}, data_{std::move(data)}, conn{std::move(conn)} {}
     bool operator()() {
       auto remaining = std::string_view{data_};
       remaining = remaining.substr(index);
       auto written = ::write(conn->fd(), remaining.data(), remaining.size());
       if (written < 0) {
-        throw errno;
+        f(Result{Result::Type::err, errno});
+        return false;
       }
       if (written < std::ssize(remaining)) {
         index += written;
         return true;
       }
-      f();
+      f(Result::Ok());
       return false;
     }
   };
