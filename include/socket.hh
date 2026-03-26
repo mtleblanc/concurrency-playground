@@ -12,6 +12,7 @@
 #include <string>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <system_error>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -234,27 +235,9 @@ inline void Multiplex::disableWrite(int fd) {
   fds_[fdToIndex_[fd]].events &= ~POLLOUT;
 }
 
-class Result {
-
-public:
-  enum class Type {
-    ok,
-    err,
-  };
-  constexpr Result(Type type = Type::ok, int ec = 0) : type_{type}, ec_{ec} {}
-  constexpr operator bool() const { return type_ != Type::ok; }
-  constexpr int errorNumber() const { return ec_; }
-
-  static constexpr auto Ok() { return Result{}; }
-
-private:
-  Type type_;
-  int ec_;
-};
-
 class TcpAsio {
-  using ReadFunction = std::function<void(Result, std::string &)>;
-  using WriteFunction = std::function<void(Result)>;
+  using ReadFunction = std::function<void(std::error_code, std::string &)>;
+  using WriteFunction = std::function<void(std::error_code)>;
   using ReadyFunction = std::function<bool()>;
 
   Multiplex multiplex;
@@ -269,11 +252,11 @@ class TcpAsio {
       std::string data(512, '\0');
       auto read = ::read(conn->fd(), data.data(), data.size());
       if (read < 0) {
-        f(Result{Result::Type::err, errno}, data);
+        f(std::error_code{errno, std::system_category()}, data);
         return false;
       }
       data.resize(read);
-      f(Result::Ok(), data);
+      f(std::error_code{}, data);
       return false;
     }
   };
@@ -291,14 +274,14 @@ class TcpAsio {
       remaining = remaining.substr(index);
       auto written = ::write(conn->fd(), remaining.data(), remaining.size());
       if (written < 0) {
-        f(Result{Result::Type::err, errno});
+        f(std::error_code{errno, std::system_category()});
         return false;
       }
       if (written < std::ssize(remaining)) {
         index += written;
         return true;
       }
-      f(Result::Ok());
+      f(std::error_code{});
       return false;
     }
   };
