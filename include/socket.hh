@@ -184,15 +184,25 @@ inline void Monitor::onWrite(Action f) {
   mp_->enableWrite(fd_);
 }
 inline void Monitor::doRead() {
-  if (!readReady_ || !(*readReady_)()) {
-    mp_->disableRead(fd_);
-    readReady_ = {};
+  mp_->disableRead(fd_);
+  if (!readReady_) {
+    return;
+  }
+  auto f = std::move(*readReady_);
+  readReady_ = {};
+  if (f()) {
+    onRead(std::move(f));
   }
 }
 inline void Monitor::doWrite() {
-  if (!writeReady_ || !(*writeReady_)()) {
-    mp_->disableWrite(fd_);
-    writeReady_ = {};
+  mp_->disableWrite(fd_);
+  if (!writeReady_) {
+    return;
+  }
+  auto f = std::move(*writeReady_);
+  writeReady_ = {};
+  if (f()) {
+    onWrite(std::move(f));
   }
 }
 
@@ -244,11 +254,15 @@ inline void Multiplex::disableWrite(int fd) {
 }
 
 class TcpAsio {
+public:
+  class Conn;
+
+private:
   using ReadFunction = std::function<void(std::error_code, std::string &)>;
   using WriteFunction = std::function<void(std::error_code)>;
   using ReadyFunction = std::function<bool()>;
   using AcceptFunction =
-      std::function<void(std::error_code, std::shared_ptr<Socket>)>;
+      std::function<void(std::error_code, std::shared_ptr<Conn>)>;
 
   Multiplex multiplex;
 
@@ -301,13 +315,16 @@ class TcpAsio {
   class Acceptor {
     AcceptFunction f_;
     TcpServer *conn_;
+    Multiplex *mp_;
 
   public:
-    Acceptor(AcceptFunction f, TcpServer *conn)
-        : f_{std::move(f)}, conn_{conn} {}
+    Acceptor(AcceptFunction f, TcpServer *conn, Multiplex *mp)
+        : f_{std::move(f)}, conn_{conn}, mp_{mp} {}
     bool operator()() {
-      auto socket = conn_->accept2();
-      f_(socket.first, socket.second);
+      auto [ec, conn] = conn_->accept2();
+      auto mon = mp_->monitor(conn->fd());
+      auto conn2 = std::make_shared<Conn>(mon, conn);
+      f_(ec, conn2);
       // potential issue here, f could call accept again before returning
       // control
       return false;
@@ -328,14 +345,15 @@ public:
   };
 
   class ReactorServer {
+    Multiplex *mp_;
     Monitor *mon_;
     TcpServer server_;
 
   public:
-    ReactorServer(Monitor *mon, TcpServer server)
-        : mon_{mon}, server_{std::move(server)} {}
+    ReactorServer(Multiplex *mp, Monitor *mon, TcpServer server)
+        : mp_{mp}, mon_{mon}, server_{std::move(server)} {}
     void accept(AcceptFunction f) {
-      mon_->onRead(Acceptor(std::move(f), &server_));
+      mon_->onRead(Acceptor(std::move(f), &server_, mp_));
     }
   };
 

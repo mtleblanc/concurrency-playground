@@ -74,22 +74,28 @@ private:
 
 class AcceptAwaitable {
 public:
-  AcceptAwaitable(std::shared_ptr<TcpAsio::Conn> conn)
-      : conn{std::move(conn)} {}
+  AcceptAwaitable(std::shared_ptr<TcpAsio::ReactorServer> conn)
+      : conn_{std::move(conn)} {}
   auto operator co_await() {
     struct Awaiter {
+      using Result = std::pair<std::error_code, std::shared_ptr<TcpAsio::Conn>>;
       AcceptAwaitable &awaitable;
-      std::error_code result{};
+      Result result{};
 
       bool await_ready() const noexcept { return false; }
       void
-      await_suspend([[maybe_unused]] std::coroutine_handle<> handle) noexcept {}
+      await_suspend([[maybe_unused]] std::coroutine_handle<> handle) noexcept {
+        awaitable.conn_->accept([this, handle](auto ec, auto conn) {
+          result = {ec, conn};
+          handle.resume();
+        });
+      }
 
-      std::error_code await_resume() const noexcept { return result; }
+      Result await_resume() const noexcept { return result; }
     };
     return Awaiter{*this};
   }
 
 private:
-  std::shared_ptr<TcpAsio::Conn> conn;
+  std::shared_ptr<TcpAsio::ReactorServer> conn_;
 };

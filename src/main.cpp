@@ -48,28 +48,31 @@ public:
   multiplexServer.run();
 }
 
-[[maybe_unused]] AsioCoroutine coro() {
-  for (;;) {
-  }
-}
-
 [[maybe_unused]] AsioCoroutine echo(std::shared_ptr<TcpAsio::Conn> conn) {
   for (;;) {
-    auto [ec, data] = co_await (ReadAwaitable{conn});
+    auto [ec, data] = co_await ReadAwaitable{conn};
     if (ec) {
       co_return;
     }
-    ec = co_await (WriteAwaitable(conn, data));
+    ec = co_await WriteAwaitable(conn, data);
     if (ec) {
       co_return;
     }
   }
 }
 
-int main() {
-  std::println("concurrency playground");
-  auto address = std::string{"0.0.0.0"};
-  auto server = TcpServer{address, 12345};
+[[maybe_unused]] AsioCoroutine
+serve(std::shared_ptr<TcpAsio::ReactorServer> server) {
+  for (;;) {
+    auto [ec, conn] = co_await AcceptAwaitable(server);
+    if (ec) {
+      continue;
+    }
+    echo(conn);
+  }
+}
+
+[[maybe_unused]] void coroReadWrite(TcpServer server) {
   auto multiplexServer =
       TcpAsio::Server{std::move(server), [&](auto conn) {
                         auto connp =
@@ -77,4 +80,20 @@ int main() {
                         echo(std::move(connp));
                       }};
   multiplexServer.run();
+}
+
+[[maybe_unused]] void fullCoro(TcpServer server) {
+  Multiplex mp;
+  auto mon = mp.monitor(server.fd());
+  auto rs =
+      std::make_shared<TcpAsio::ReactorServer>(&mp, mon, std::move(server));
+  serve(rs);
+  mp.run();
+}
+
+int main() {
+  std::println("concurrency playground");
+  auto address = std::string{"0.0.0.0"};
+  auto server = TcpServer{address, 12345};
+  fullCoro(std::move(server));
 }
