@@ -275,7 +275,7 @@ private:
         : f{std::move(f)}, conn{std::move(conn)} {}
     bool operator()() {
       std::string data(512, '\0');
-      auto read = ::read(conn->fd(), data.data(), data.size());
+      auto read = ::recv(conn->fd(), data.data(), data.size(), MSG_DONTWAIT);
       if (read < 0) {
         f(std::error_code{errno, std::system_category()}, data);
         return false;
@@ -298,7 +298,8 @@ private:
     bool operator()() {
       auto remaining = std::string_view{data_};
       remaining = remaining.substr(index);
-      auto written = ::write(conn->fd(), remaining.data(), remaining.size());
+      auto written =
+          ::send(conn->fd(), remaining.data(), remaining.size(), MSG_DONTWAIT);
       if (written < 0) {
         f(std::error_code{errno, std::system_category()});
         return false;
