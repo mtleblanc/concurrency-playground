@@ -47,8 +47,34 @@ public:
                       }};
   multiplexServer.run();
 }
-AsioCoroutine coro() { co_return; }
+
+[[maybe_unused]] AsioCoroutine coro() {
+  for (;;) {
+  }
+}
+
+[[maybe_unused]] AsioCoroutine echo(std::shared_ptr<TcpAsio::Conn> conn) {
+  for (;;) {
+    auto [ec, data] = co_await (ReadAwaitable{conn});
+    if (ec) {
+      co_return;
+    }
+    ec = co_await (WriteAwaitable(conn, data));
+    if (ec) {
+      co_return;
+    }
+  }
+}
+
 int main() {
   std::println("concurrency playground");
-  coro();
+  auto address = std::string{"0.0.0.0"};
+  auto server = TcpServer{address, 12345};
+  auto multiplexServer =
+      TcpAsio::Server{std::move(server), [&](auto conn) {
+                        auto connp =
+                            std::make_shared<TcpAsio::Conn>(std::move(conn));
+                        echo(std::move(connp));
+                      }};
+  multiplexServer.run();
 }

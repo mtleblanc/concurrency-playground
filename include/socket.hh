@@ -120,6 +120,14 @@ public:
   auto accept() const {
     return std::make_shared<Socket>(::accept(socket_, nullptr, nullptr));
   }
+
+  std::pair<std::error_code, std::shared_ptr<Socket>> accept2() const {
+    auto newFd = ::accept(socket_, nullptr, nullptr);
+    if (newFd < 0) {
+      return {std::error_code{errno, std::system_category()}, {}};
+    }
+    return {{}, std::make_shared<Socket>(newFd)};
+  }
 };
 
 class Monitor;
@@ -239,8 +247,11 @@ class TcpAsio {
   using ReadFunction = std::function<void(std::error_code, std::string &)>;
   using WriteFunction = std::function<void(std::error_code)>;
   using ReadyFunction = std::function<bool()>;
+  using AcceptFunction =
+      std::function<void(std::error_code, std::shared_ptr<Socket>)>;
 
   Multiplex multiplex;
+
   class Reader {
     ReadFunction f;
     std::shared_ptr<Socket> conn;
@@ -260,6 +271,7 @@ class TcpAsio {
       return false;
     }
   };
+
   class Writer {
     WriteFunction f;
     std::string data_;
@@ -286,6 +298,22 @@ class TcpAsio {
     }
   };
 
+  class Acceptor {
+    AcceptFunction f_;
+    TcpServer *conn_;
+
+  public:
+    Acceptor(AcceptFunction f, TcpServer *conn)
+        : f_{std::move(f)}, conn_{conn} {}
+    bool operator()() {
+      auto socket = conn_->accept2();
+      f_(socket.first, socket.second);
+      // potential issue here, f could call accept again before returning
+      // control
+      return false;
+    }
+  };
+
 public:
   class Conn {
     Monitor *mon;
@@ -296,6 +324,18 @@ public:
     void read(ReadFunction f) { mon->onRead(Reader(std::move(f), conn)); }
     void write(std::string data, WriteFunction f) {
       mon->onWrite(Writer(std::move(f), std::move(data), conn));
+    }
+  };
+
+  class ReactorServer {
+    Monitor *mon_;
+    TcpServer server_;
+
+  public:
+    ReactorServer(Monitor *mon, TcpServer server)
+        : mon_{mon}, server_{std::move(server)} {}
+    void accept(AcceptFunction f) {
+      mon_->onRead(Acceptor(std::move(f), &server_));
     }
   };
 
