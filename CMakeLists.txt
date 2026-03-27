@@ -9,6 +9,5 @@ add_compile_options(-Wall -Wextra -Wpedantic -Werror)
 
 find_package(Threads REQUIRED)
 
-include_directories(${CMAKE_SOURCE_DIR}/include)
-
+add_subdirectory(lib)
 add_subdirectory(src)
