@@ -5,6 +5,8 @@
 #include <system_error>
 #include <utility>
 
+namespace Asio {
+
 class AsioCoroutine {
 public:
   struct Promise {
@@ -99,3 +101,4 @@ public:
 private:
   std::shared_ptr<TcpAsio::ReactorServer> conn_;
 };
+} // namespace Asio

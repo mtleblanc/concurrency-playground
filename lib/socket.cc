@@ -1,5 +1,6 @@
 #include "socket.hh"
 
+namespace Asio {
 AddressInfo::AddressInfo(std::string &address, int port,
                          const addrinfo *hints) {
   auto decimal_port = std::to_string(port);
@@ -17,6 +18,14 @@ Socket::Socket(int domain, int type, int proto) {
     throw std::bad_alloc();
   }
 }
+
+constexpr static addrinfo hints = [] {
+  addrinfo h{};
+  h.ai_family = AF_UNSPEC;
+  h.ai_socktype = SOCK_STREAM;
+  h.ai_protocol = IPPROTO_TCP;
+  return h;
+}();
 
 TcpServer::TcpServer(std::string &address, int port)
     : addressInfo_{address, port, &hints},
@@ -116,6 +125,33 @@ void Multiplex::disableWrite(int fd) {
   fds_[fdToIndex_[fd]].events &= ~POLLOUT;
 }
 
+struct TcpAsio::Reader {
+  ReadFunction f;
+  std::shared_ptr<Socket> conn;
+  Reader(ReadFunction f, std::shared_ptr<Socket> conn)
+      : f{std::move(f)}, conn{std::move(conn)} {}
+  bool operator()();
+};
+
+struct TcpAsio::Writer {
+  WriteFunction f;
+  std::string data_;
+  int index{};
+  std::shared_ptr<Socket> conn;
+  Writer(WriteFunction f, std::string data, std::shared_ptr<Socket> conn)
+      : f{std::move(f)}, data_{std::move(data)}, conn{std::move(conn)} {}
+  bool operator()();
+};
+
+struct TcpAsio::Acceptor {
+  AcceptFunction f_;
+  TcpServer *conn_;
+  Multiplex *mp_;
+  Acceptor(AcceptFunction f, TcpServer *conn, Multiplex *mp)
+      : f_{std::move(f)}, conn_{conn}, mp_{mp} {}
+  bool operator()();
+};
+
 bool TcpAsio::Reader::operator()() {
   std::string data(512, '\0');
   auto read = ::recv(conn->fd(), data.data(), data.size(), MSG_DONTWAIT);
@@ -155,6 +191,16 @@ bool TcpAsio::Acceptor::operator()() {
   return false;
 }
 
+void TcpAsio::Conn::read(ReadFunction f) {
+  mon_->onRead(Reader(std::move(f), conn_));
+}
+void TcpAsio::Conn::write(std::string data, WriteFunction f) {
+  mon_->onWrite(Writer(std::move(f), std::move(data), conn_));
+}
+void TcpAsio::ReactorServer::accept(AcceptFunction f) {
+  mon_->onRead(Acceptor(std::move(f), &server_, mp_));
+}
+
 TcpAsio::Server::Server(TcpServer server, std::function<void(Conn)> onAccept)
     : server_{std::move(server)}, serverMonitor_{mp.monitor(server_.fd())},
       onAccept_{std::move(onAccept)} {
@@ -166,3 +212,4 @@ TcpAsio::Server::Server(TcpServer server, std::function<void(Conn)> onAccept)
     return true;
   });
 }
+} // namespace Asio

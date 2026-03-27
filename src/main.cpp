@@ -3,6 +3,8 @@
 #include <functional>
 #include <print>
 
+using namespace Asio;
+
 class EchoConnection {
   TcpAsio::Conn *conn_;
 

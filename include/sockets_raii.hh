@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <utility>
 
+namespace Asio {
+
 class AddressInfo {
   addrinfo *addressInfo_{};
 
@@ -66,3 +68,4 @@ private:
     fd_ = -1;
   }
 };
+} // namespace Asio
