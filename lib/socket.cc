@@ -1,4 +1,5 @@
 #include "socket.hh"
+#include <print>
 
 namespace Asio {
 AddressInfo::AddressInfo(std::string &address, int port,
@@ -28,9 +29,8 @@ constexpr static addrinfo hints = [] {
 }();
 
 TcpServer::TcpServer(std::string &address, int port)
-    : addressInfo_{address, port, &hints},
-      socket_{addressInfo_->ai_family, SOCK_STREAM | SOCK_CLOEXEC,
-              IPPROTO_TCP} {
+    : socket_{AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP} {
+  auto addressInfo_ = AddressInfo{address, port, &hints};
   if (::bind(socket_, addressInfo_->ai_addr, addressInfo_->ai_addrlen)) {
     throw std::bad_alloc{};
   }
@@ -39,12 +39,12 @@ TcpServer::TcpServer(std::string &address, int port)
   }
 }
 
-std::pair<std::error_code, std::shared_ptr<Socket>> TcpServer::accept() const {
+Result<std::shared_ptr<Socket>> TcpServer::accept() const {
   auto newFd = ::accept(socket_, nullptr, nullptr);
   if (newFd < 0) {
-    return {std::error_code{errno, std::system_category()}, {}};
+    return std::unexpected{std::error_code{errno, std::system_category()}};
   }
-  return {{}, std::make_shared<Socket>(newFd)};
+  return std::make_shared<Socket>(newFd);
 }
 
 void Monitor::onRead(Action f) {
@@ -94,10 +94,10 @@ void Multiplex::doPoll() {
     auto &fd = fds_[i];
     auto &monitor = sockets_.at(fd.fd);
     if (fd.revents & POLLIN) {
-      monitor.doRead();
+      monitor->doRead();
     }
     if (fd.revents & POLLOUT) {
-      monitor.doWrite();
+      monitor->doWrite();
     }
   }
 }
@@ -108,11 +108,11 @@ void Multiplex::run() {
   }
 }
 
-Monitor *Multiplex::monitor(int fd) {
-  sockets_.emplace(fd, Monitor{fd, this});
+std::shared_ptr<Monitor> Multiplex::monitor(int fd) {
+  sockets_.emplace(fd, std::make_shared<Monitor>(Monitor{fd, this}));
   fds_.emplace_back(fd, 0, 0);
   fdToIndex_.emplace(fd, fds_.size() - 1);
-  return &sockets_.at(fd);
+  return sockets_.at(fd);
 }
 
 void Multiplex::enableRead(int fd) { fds_[fdToIndex_[fd]].events |= POLLIN; }
@@ -182,12 +182,14 @@ bool TcpAsio::Writer::operator()() {
 }
 
 bool TcpAsio::Acceptor::operator()() {
-  auto [ec, conn] = conn_->accept();
-  auto mon = mp_->monitor(conn->fd());
-  auto conn2 = std::make_shared<Conn>(mon, conn);
-  f_(ec, conn2);
-  // potential issue here, f could call accept again before returning
-  // control
+  auto res = conn_->accept().transform([this](auto conn) {
+    return std::make_shared<Conn>(mp_->monitor(conn->fd()), conn);
+  });
+  if (!res) {
+    f_(res.error(), {});
+    return false;
+  }
+  f_({}, res.value());
   return false;
 }
 
@@ -205,10 +207,13 @@ TcpAsio::Server::Server(TcpServer server, std::function<void(Conn)> onAccept)
     : server_{std::move(server)}, serverMonitor_{mp.monitor(server_.fd())},
       onAccept_{std::move(onAccept)} {
   serverMonitor_->onRead([&]() {
-    auto [ec, conn] = server_.accept();
-    auto mon = mp.monitor(conn->fd());
-    auto conn2 = Conn{mon, conn};
-    onAccept_(std::move(conn2));
+    auto res = server_.accept().transform([this](auto conn) {
+      auto conn2 = Conn{mp.monitor(conn->fd()), conn};
+      return Conn{mp.monitor(conn->fd()), conn};
+    });
+    if (res) {
+      onAccept_(res.value());
+    }
     return true;
   });
 }

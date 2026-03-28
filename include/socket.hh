@@ -3,6 +3,7 @@
 #include "sockets_raii.hh"
 
 #include <cstring>
+#include <expected>
 #include <functional>
 #include <map>
 #include <memory>
@@ -19,15 +20,16 @@
 
 namespace Asio {
 
+template <typename T> using Result = std::expected<T, std::error_code>;
+
 class TcpServer {
 public:
   TcpServer(std::string &address, int port);
 
   int fd() const { return socket_; }
-  std::pair<std::error_code, std::shared_ptr<Socket>> accept() const;
+  Result<std::shared_ptr<Socket>> accept() const;
 
 private:
-  AddressInfo addressInfo_;
   Socket socket_;
 };
 
@@ -62,14 +64,14 @@ class Multiplex {
 public:
   void doPoll();
   void run();
-  Monitor *monitor(int fd);
+  std::shared_ptr<Monitor> monitor(int fd);
   void enableRead(int fd);
   void enableWrite(int fd);
   void disableRead(int fd);
   void disableWrite(int fd);
 
 private:
-  std::map<int, Monitor> sockets_{};
+  std::map<int, std::shared_ptr<Monitor>> sockets_{};
   std::map<int, int> fdToIndex_{};
   std::vector<pollfd> fds_{};
 };
@@ -85,26 +87,27 @@ public:
 
   class Conn {
   public:
-    Conn(Monitor *mon, std::shared_ptr<Socket> conn) : mon_{mon}, conn_{conn} {}
+    Conn(std::shared_ptr<Monitor> mon, std::shared_ptr<Socket> conn)
+        : mon_{mon}, conn_{conn} {}
 
     void read(ReadFunction f);
     void write(std::string data, WriteFunction f);
 
   private:
-    Monitor *mon_;
+    std::shared_ptr<Monitor> mon_;
     std::shared_ptr<Socket> conn_;
   };
 
   class ReactorServer {
   public:
-    ReactorServer(Multiplex *mp, Monitor *mon, TcpServer server)
+    ReactorServer(Multiplex *mp, std::shared_ptr<Monitor> mon, TcpServer server)
         : mp_{mp}, mon_{mon}, server_{std::move(server)} {}
 
     void accept(AcceptFunction f);
 
   private:
     Multiplex *mp_;
-    Monitor *mon_;
+    std::shared_ptr<Monitor> mon_;
     TcpServer server_;
   };
 
@@ -117,7 +120,7 @@ public:
   private:
     TcpServer server_;
     Multiplex mp;
-    Monitor *serverMonitor_;
+    std::shared_ptr<Monitor> serverMonitor_;
     std::function<void(Conn)> onAccept_;
   };
 
