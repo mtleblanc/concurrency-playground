@@ -185,11 +185,7 @@ bool TcpAsio::Acceptor::operator()() {
   auto res = conn_->accept().transform([this](auto conn) {
     return std::make_shared<Conn>(mp_->monitor(conn->fd()), conn);
   });
-  if (!res) {
-    f_(res.error(), {});
-    return false;
-  }
-  f_({}, res.value());
+  f_(res.error_or({}), res.value_or(std::shared_ptr<Conn>{}));
   return false;
 }
 
