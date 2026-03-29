@@ -47,40 +47,40 @@ Result<std::shared_ptr<Socket>> TcpServer::accept() const {
   return std::make_shared<Socket>(newFd);
 }
 
-void Monitor::onRead(Action f) {
-  if (readReady_) {
+void Monitor::onReadReady(Action f) {
+  if (onReadReady_) {
     throw std::logic_error{"read already pending"};
   }
-  readReady_ = std::move(f);
+  onReadReady_ = std::move(f);
   mp_->enableRead(fd_);
 }
-void Monitor::onWrite(Action f) {
-  if (writeReady_) {
+void Monitor::onWriteReady(Action f) {
+  if (onWriteReady_) {
     throw std::logic_error{"write already pending"};
   }
-  writeReady_ = std::move(f);
+  onWriteReady_ = std::move(f);
   mp_->enableWrite(fd_);
 }
-void Monitor::doRead() {
+void Monitor::read() {
   mp_->disableRead(fd_);
-  if (!readReady_) {
+  if (!onReadReady_) {
     return;
   }
-  auto f = std::move(*readReady_);
-  readReady_ = {};
+  auto f = std::move(*onReadReady_);
+  onReadReady_ = {};
   if (f()) {
-    onRead(std::move(f));
+    onReadReady(std::move(f));
   }
 }
-void Monitor::doWrite() {
+void Monitor::write() {
   mp_->disableWrite(fd_);
-  if (!writeReady_) {
+  if (!onWriteReady_) {
     return;
   }
-  auto f = std::move(*writeReady_);
-  writeReady_ = {};
+  auto f = std::move(*onWriteReady_);
+  onWriteReady_ = {};
   if (f()) {
-    onWrite(std::move(f));
+    onWriteReady(std::move(f));
   }
 }
 
@@ -94,10 +94,10 @@ void Multiplex::doPoll() {
     auto &fd = fds_[i];
     auto &monitor = sockets_.at(fd.fd);
     if (fd.revents & POLLIN) {
-      monitor->doRead();
+      monitor->read();
     }
     if (fd.revents & POLLOUT) {
-      monitor->doWrite();
+      monitor->write();
     }
   }
 }
@@ -190,19 +190,19 @@ bool TcpAsio::Acceptor::operator()() {
 }
 
 void TcpAsio::Conn::read(ReadFunction f) {
-  mon_->onRead(Reader(std::move(f), conn_));
+  mon_->onReadReady(Reader(std::move(f), socket_));
 }
 void TcpAsio::Conn::write(std::string data, WriteFunction f) {
-  mon_->onWrite(Writer(std::move(f), std::move(data), conn_));
+  mon_->onWriteReady(Writer(std::move(f), std::move(data), socket_));
 }
 void TcpAsio::ReactorServer::accept(AcceptFunction f) {
-  mon_->onRead(Acceptor(std::move(f), &server_, mp_));
+  mon_->onReadReady(Acceptor(std::move(f), &server_, mp_));
 }
 
 TcpAsio::Server::Server(TcpServer server, std::function<void(Conn)> onAccept)
     : server_{std::move(server)}, serverMonitor_{mp.monitor(server_.fd())},
       onAccept_{std::move(onAccept)} {
-  serverMonitor_->onRead([&]() {
+  serverMonitor_->onReadReady([&]() {
     auto res = server_.accept().transform([this](auto conn) {
       auto conn2 = Conn{mp.monitor(conn->fd()), conn};
       return Conn{mp.monitor(conn->fd()), conn};

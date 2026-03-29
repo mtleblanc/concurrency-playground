@@ -45,10 +45,10 @@ public:
   ~Monitor() = default;
 
   using Action = std::function<bool()>;
-  void onRead(Action f);
-  void onWrite(Action f);
-  void doRead();
-  void doWrite();
+  void onReadReady(Action f);
+  void onWriteReady(Action f);
+  void read();
+  void write();
 
 private:
   friend class Multiplex;
@@ -56,8 +56,8 @@ private:
 
   int fd_;
   Multiplex *mp_;
-  std::optional<Action> readReady_;
-  std::optional<Action> writeReady_;
+  std::optional<Action> onReadReady_;
+  std::optional<Action> onWriteReady_;
 };
 
 class Multiplex {
@@ -87,15 +87,15 @@ public:
 
   class Conn {
   public:
-    Conn(std::shared_ptr<Monitor> mon, std::shared_ptr<Socket> conn)
-        : mon_{mon}, conn_{conn} {}
+    Conn(std::shared_ptr<Monitor> mon, std::shared_ptr<Socket> socket)
+        : mon_{mon}, socket_{socket} {}
 
     void read(ReadFunction f);
     void write(std::string data, WriteFunction f);
 
   private:
     std::shared_ptr<Monitor> mon_;
-    std::shared_ptr<Socket> conn_;
+    std::shared_ptr<Socket> socket_;
   };
 
   class ReactorServer {
