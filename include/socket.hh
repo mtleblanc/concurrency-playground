@@ -76,6 +76,48 @@ private:
   std::vector<pollfd> fds_{};
 };
 
+class ReactiveAsio {
+  class Conn;
+  using ReadFunction = std::function<void(std::error_code, std::string &)>;
+  using WriteFunction = std::function<void(std::error_code)>;
+  using ReadyFunction = std::function<bool()>;
+  using AcceptFunction =
+      std::function<void(std::error_code, std::shared_ptr<Conn>)>;
+
+  class Conn {
+  public:
+    Conn(std::shared_ptr<Monitor> mon, std::shared_ptr<Socket> socket)
+        : mon_{mon}, socket_{socket} {}
+
+    void read(ReadFunction f);
+    void write(std::string data, WriteFunction f);
+
+  private:
+    std::shared_ptr<Monitor> mon_;
+    std::shared_ptr<Socket> socket_;
+  };
+
+  class ReactorServer {
+  public:
+    ReactorServer(Multiplex *mp, std::shared_ptr<Monitor> mon, TcpServer server)
+        : mp_{mp}, mon_{mon}, server_{std::move(server)} {}
+
+    void accept(AcceptFunction f);
+
+  private:
+    Multiplex *mp_;
+    std::shared_ptr<Monitor> mon_;
+    TcpServer server_;
+  };
+
+private:
+  struct Reader;
+  struct Writer;
+  struct Acceptor;
+
+  Multiplex multiplex_;
+};
+
 class TcpAsio {
 public:
   class Conn;

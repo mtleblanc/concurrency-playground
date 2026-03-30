@@ -8,8 +8,6 @@
 namespace Asio {
 
 class AddressInfo {
-  addrinfo *addressInfo_{};
-
 public:
   AddressInfo() {}
   AddressInfo(std::string &address, int port, const addrinfo *hints = nullptr);
@@ -36,6 +34,31 @@ private:
     }
     addressInfo_ = nullptr;
   }
+
+  addrinfo *addressInfo_;
+};
+
+class SocketAddress {
+public:
+  SocketAddress()
+      : owning{true}, socketAddress_(static_cast<sockaddr *>(
+                          malloc(sizeof(sockaddr_storage)))),
+        length_(0) {}
+  SocketAddress(sockaddr *, socklen_t);
+
+  sockaddr *operator*() const { return socketAddress_; }
+  socklen_t size() const { return length_; }
+
+private:
+  void release() {
+    if (owning && socketAddress_ != nullptr) {
+      free(socketAddress_);
+      socketAddress_ = nullptr;
+    }
+  }
+  bool owning = false;
+  sockaddr *socketAddress_;
+  socklen_t length_;
 };
 
 class Socket {
