@@ -1,8 +1,10 @@
 #include "sockets_raii.hh"
+#include <cassert>
 #include <expected>
 #include <functional>
 #include <optional>
 #include <poll.h>
+#include <ranges>
 #include <system_error>
 
 namespace Asio {
@@ -30,10 +32,13 @@ public:
   void run();
   void readable(Handle, ReadyAction);
   void writable(Handle, ReadyAction);
-  std::optional<Socket &> get(Handle);
+  std::optional<std::reference_wrapper<Socket>> get(Handle);
   Handle watch(Socket);
 
 private:
+  void doRead(int);
+  void doWrite(int);
+
   struct Slot {
     Socket socket{};
     ReadyAction readable{};
@@ -42,8 +47,9 @@ private:
     int generation{};
     int fdsIndex;
   };
+
   std::vector<pollfd> pollFds_{};
-  std::unordered_map<int, Socket> socketIndices{};
+  std::unordered_map<int, Slot> socketIndices{};
 };
 
 class ConnectedSocket : MoveOnly {
@@ -58,4 +64,66 @@ public:
   ListeningSocket(IOContext &context, IOContext::Handle handle);
   void accept(sockaddr *, socklen_t *, Callback<Socket>);
 };
+} // namespace Asio
+
+namespace Asio {
+void IOContext::run() {
+  for (;;) {
+    auto n = ::poll(pollFds_.data(), pollFds_.size(), -1);
+    if (n < 0) {
+      throw std::make_error_code(static_cast<std::errc>(errno));
+    }
+    if (n == 0) {
+      continue;
+    }
+    // copy so that callbacks can modify without invalidating ready set
+    auto ready = std::ranges::to<std::vector>(
+        pollFds_ | std::views::filter(
+                       [](const auto &pollfd) { return pollfd.events != 0; }));
+    for (const auto &pollfd : ready) {
+      if (pollfd.events & POLLOUT) {
+        doWrite(pollfd.fd);
+      }
+      if (pollfd.events & POLLIN) {
+        doRead(pollfd.fd);
+      }
+    }
+  }
+}
+
+std::optional<std::reference_wrapper<Socket>> IOContext::get(Handle h) {
+  if (!socketIndices.contains(h.fd)) {
+    return {};
+  }
+  auto &socket = socketIndices.at(h.fd);
+  if (!socket.occupied || h.generation != socket.generation) {
+    return {};
+  }
+  return socket.socket;
+}
+
+void IOContext::doRead(int fd) {
+  assert(socketIndices.contains(fd));
+  auto &slot = socketIndices.at(fd);
+  auto &pollFd = pollFds_[slot.fdsIndex];
+  assert(pollFd.fd == fd);
+  pollFd.events &= ~POLLIN;
+  auto readable = std::exchange(slot.readable, nullptr);
+  if (readable != nullptr) {
+    readable(slot.socket);
+  }
+}
+
+void IOContext::doWrite(int fd) {
+  assert(socketIndices.contains(fd));
+  auto &slot = socketIndices.at(fd);
+  auto &pollFd = pollFds_[slot.fdsIndex];
+  assert(pollFd.fd == fd);
+  pollFd.events &= ~POLLOUT;
+  auto writeable = std::exchange(slot.writeable, nullptr);
+  if (writeable != nullptr) {
+    writeable(slot.socket);
+  }
+}
+
 } // namespace Asio
