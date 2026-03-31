@@ -1,66 +1,61 @@
 #include "sockets_raii.hh"
+#include <expected>
 #include <functional>
-#include <memory>
-#include <string>
+#include <optional>
+#include <poll.h>
 #include <system_error>
+
 namespace Asio {
-class ConnectedSocket;
-class ListeningSocket;
-class IOContext;
 
-class IOContext {
+class MoveOnly {
+protected:
+  MoveOnly(const MoveOnly &) = delete;
+  MoveOnly(MoveOnly &&) = default;
+  MoveOnly &operator=(const MoveOnly &) = delete;
+  MoveOnly &operator=(MoveOnly &&) = default;
+  ~MoveOnly() = default;
+};
+
+template <typename T>
+using Callback = std::function<void(std::expected<T, std::error_code>)>;
+
+class IOContext : MoveOnly {
 public:
+  using ReadyAction = std::function<void(Socket &)>;
+  struct Handle {
+    int fd;
+    int generation;
+  };
+
   void run();
-};
-
-class ConnectedSocket {
-public:
-  ConnectedSocket(IOContext &context, Socket socket);
-  void read(char *buffer, int bufferSize, std::function<void(int)>);
-  void write(char *buffer, int bufferSize, std::function<void(int)>);
-};
-
-class ListeningSocket {
-public
-  ListeningSocket(IOContext &context, Socket socket);
-  void accept() {}
-};
-using ReadFunction = std::function<void(std::error_code, std::string &)>;
-using WriteFunction = std::function<void(std::error_code, int)>;
-using ReadyFunction = std::function<bool()>;
-using AcceptFunction =
-    std::function<void(std::error_code, std::shared_ptr<ConnectedSocket>)>;
-
-class ConnectedSocket {
-public:
-  ConnectedSocket(std::shared_ptr<Monitor> mon, std::shared_ptr<Socket> socket)
-      : mon_{mon}, socket_{socket} {}
-
-  void read(ReadFunction f);
-  void write(std::string data, WriteFunction f);
+  void readable(Handle, ReadyAction);
+  void writable(Handle, ReadyAction);
+  std::optional<Socket &> get(Handle);
+  Handle watch(Socket);
 
 private:
-  std::shared_ptr<Monitor> mon_;
-  std::shared_ptr<Socket> socket_;
+  struct Slot {
+    Socket socket{};
+    ReadyAction readable{};
+    ReadyAction writeable{};
+    bool occupied{};
+    int generation{};
+    int fdsIndex;
+  };
+  std::vector<pollfd> pollFds_{};
+  std::unordered_map<int, Socket> socketIndices{};
 };
 
-class ListeningSocket {
+class ConnectedSocket : MoveOnly {
 public:
-  ListeningSocket(Multiplex *mp, std::shared_ptr<Monitor> mon, TcpServer server)
-      : mp_{mp}, mon_{mon}, server_{std::move(server)} {}
-
-  void accept(AcceptFunction f);
-
-private:
-  Multiplex *mp_;
-  std::shared_ptr<Monitor> mon_;
-  TcpServer server_;
+  ConnectedSocket(IOContext &context, IOContext::Handle handle);
+  void read(char *buffer, int bufferSize, Callback<int>);
+  void write(char *buffer, int bufferSize, Callback<int>);
 };
 
-private:
-struct Reader;
-struct Writer;
-struct Acceptor;
-
-Multiplex multiplex_;
+class ListeningSocket : MoveOnly {
+public:
+  ListeningSocket(IOContext &context, IOContext::Handle handle);
+  void accept(sockaddr *, socklen_t *, Callback<Socket>);
+};
 } // namespace Asio
