@@ -31,7 +31,7 @@ public:
 
   void run();
   void readable(Handle, ReadyAction);
-  void writable(Handle, ReadyAction);
+  void writeable(Handle, ReadyAction);
   std::optional<std::reference_wrapper<Socket>> get(Handle);
   Handle watch(Socket);
 
@@ -91,6 +91,24 @@ void IOContext::run() {
   }
 }
 
+void IOContext::readable(Handle handle, ReadyAction action) {
+  auto &slot = socketIndices.at(handle.fd);
+  if (!slot.occupied || slot.generation != handle.generation) {
+    throw std::invalid_argument{"bad handle"};
+  }
+  slot.readable = action;
+  pollFds_[slot.fdsIndex].revents |= POLLIN;
+}
+
+void IOContext::writeable(Handle handle, ReadyAction action) {
+  auto &slot = socketIndices.at(handle.fd);
+  if (!slot.occupied || slot.generation != handle.generation) {
+    throw std::invalid_argument{"bad handle"};
+  }
+  slot.writeable = action;
+  pollFds_[slot.fdsIndex].revents |= POLLOUT;
+}
+
 std::optional<std::reference_wrapper<Socket>> IOContext::get(Handle h) {
   if (!socketIndices.contains(h.fd)) {
     return {};
@@ -107,7 +125,7 @@ void IOContext::doRead(int fd) {
   auto &slot = socketIndices.at(fd);
   auto &pollFd = pollFds_[slot.fdsIndex];
   assert(pollFd.fd == fd);
-  pollFd.events &= ~POLLIN;
+  pollFd.revents &= ~POLLIN;
   auto readable = std::exchange(slot.readable, nullptr);
   if (readable != nullptr) {
     readable(slot.socket);
@@ -119,7 +137,7 @@ void IOContext::doWrite(int fd) {
   auto &slot = socketIndices.at(fd);
   auto &pollFd = pollFds_[slot.fdsIndex];
   assert(pollFd.fd == fd);
-  pollFd.events &= ~POLLOUT;
+  pollFd.revents &= ~POLLOUT;
   auto writeable = std::exchange(slot.writeable, nullptr);
   if (writeable != nullptr) {
     writeable(slot.socket);
