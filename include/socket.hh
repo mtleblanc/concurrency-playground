@@ -29,7 +29,6 @@ public:
   int fd() const { return socket_; }
   Result<std::shared_ptr<Socket>> accept() const;
 
-private:
   Socket socket_;
 };
 

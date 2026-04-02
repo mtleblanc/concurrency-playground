@@ -1,7 +1,9 @@
 #include "coroutine.hh"
+#include "reactor.hh"
 #include "socket.hh"
 #include <functional>
 #include <print>
+#include <sys/socket.h>
 
 using namespace Asio;
 
@@ -93,9 +95,57 @@ serve(std::shared_ptr<TcpAsio::ReactorServer> server) {
   mp.run();
 }
 
+void read_callback(IOContext &ctx, IOContext::Handle h, Socket &s);
+struct Writer {
+  std::string data;
+  int sent{};
+  void operator()(IOContext &ctx, IOContext::Handle h, Socket &s) {
+    auto sv = std::string_view{data};
+    sv = sv.substr(sent);
+    auto n = ::send(s.fd(), sv.data(), sv.size(), MSG_DONTWAIT);
+    std::println("Sent: {}", sv.substr(0, n));
+    if (n < std::ssize(sv)) {
+      sent += n;
+      ctx.writeable(h, *this);
+    } else {
+      ctx.readable(h, read_callback);
+    }
+  }
+};
+
+void read_callback(IOContext &ctx, IOContext::Handle h, Socket &s) {
+  auto buf = std::string(1024, 0);
+  auto n = ::recv(s.fd(), buf.data(), buf.size(), MSG_DONTWAIT);
+  if (n > 0) {
+    buf.resize(n);
+    std::println("Received: {}", buf);
+    ctx.writeable(h, Writer{std::move(buf)});
+  } else {
+    std::println("Read returned {}", n);
+    ctx.readable(h, read_callback);
+  }
+}
+void connect_callback(IOContext &ctx, IOContext::Handle h, Socket &s) {
+  auto newFd = ::accept(s.fd(), nullptr, nullptr);
+  std::println("Connected fd {}", newFd);
+  if (newFd >= 0) {
+    auto newHandle = ctx.watch({newFd});
+    ctx.readable(newHandle, read_callback);
+  }
+  ctx.readable(h, connect_callback);
+}
+
+[[maybe_unused]] void reactor(TcpServer server) {
+  auto socket = std::move(server.socket_);
+  IOContext ctx;
+  auto serverHandle = ctx.watch(std::move(socket));
+  ctx.readable(serverHandle, connect_callback);
+  ctx.run();
+}
+
 int main() {
   std::println("concurrency playground");
   auto address = std::string{"0.0.0.0"};
   auto server = TcpServer{address, 12345};
-  fullCoro(std::move(server));
+  reactor(std::move(server));
 }

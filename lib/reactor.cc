@@ -1,70 +1,5 @@
-#include "sockets_raii.hh"
-#include <cassert>
-#include <expected>
-#include <functional>
-#include <optional>
-#include <poll.h>
+#include "reactor.hh"
 #include <ranges>
-#include <system_error>
-
-namespace Asio {
-
-class MoveOnly {
-protected:
-  MoveOnly(const MoveOnly &) = delete;
-  MoveOnly(MoveOnly &&) = default;
-  MoveOnly &operator=(const MoveOnly &) = delete;
-  MoveOnly &operator=(MoveOnly &&) = default;
-  ~MoveOnly() = default;
-};
-
-template <typename T>
-using Callback = std::function<void(std::expected<T, std::error_code>)>;
-
-class IOContext : MoveOnly {
-public:
-  using ReadyAction = std::function<void(Socket &)>;
-  struct Handle {
-    int fd;
-    int generation;
-  };
-
-  void run();
-  void readable(Handle, ReadyAction);
-  void writeable(Handle, ReadyAction);
-  std::optional<std::reference_wrapper<Socket>> get(Handle);
-  Handle watch(Socket);
-
-private:
-  void doRead(int);
-  void doWrite(int);
-
-  struct Slot {
-    Socket socket{};
-    ReadyAction readable{};
-    ReadyAction writeable{};
-    bool occupied{};
-    int generation{};
-    int fdsIndex;
-  };
-
-  std::vector<pollfd> pollFds_{};
-  std::unordered_map<int, Slot> socketIndices{};
-};
-
-class ConnectedSocket : MoveOnly {
-public:
-  ConnectedSocket(IOContext &context, IOContext::Handle handle);
-  void read(char *buffer, int bufferSize, Callback<int>);
-  void write(char *buffer, int bufferSize, Callback<int>);
-};
-
-class ListeningSocket : MoveOnly {
-public:
-  ListeningSocket(IOContext &context, IOContext::Handle handle);
-  void accept(sockaddr *, socklen_t *, Callback<Socket>);
-};
-} // namespace Asio
 
 namespace Asio {
 void IOContext::run() {
@@ -79,12 +14,12 @@ void IOContext::run() {
     // copy so that callbacks can modify without invalidating ready set
     auto ready = std::ranges::to<std::vector>(
         pollFds_ | std::views::filter(
-                       [](const auto &pollfd) { return pollfd.events != 0; }));
+                       [](const auto &pollfd) { return pollfd.revents != 0; }));
     for (const auto &pollfd : ready) {
-      if (pollfd.events & POLLOUT) {
+      if (pollfd.revents & POLLOUT) {
         doWrite(pollfd.fd);
       }
-      if (pollfd.events & POLLIN) {
+      if (pollfd.revents & POLLIN) {
         doRead(pollfd.fd);
       }
     }
@@ -97,7 +32,7 @@ void IOContext::readable(Handle handle, ReadyAction action) {
     throw std::invalid_argument{"bad handle"};
   }
   slot.readable = action;
-  pollFds_[slot.fdsIndex].revents |= POLLIN;
+  pollFds_[slot.fdsIndex].events |= POLLIN;
 }
 
 void IOContext::writeable(Handle handle, ReadyAction action) {
@@ -106,7 +41,7 @@ void IOContext::writeable(Handle handle, ReadyAction action) {
     throw std::invalid_argument{"bad handle"};
   }
   slot.writeable = action;
-  pollFds_[slot.fdsIndex].revents |= POLLOUT;
+  pollFds_[slot.fdsIndex].events |= POLLOUT;
 }
 
 std::optional<std::reference_wrapper<Socket>> IOContext::get(Handle h) {
@@ -120,15 +55,26 @@ std::optional<std::reference_wrapper<Socket>> IOContext::get(Handle h) {
   return socket.socket;
 }
 
+auto IOContext::watch(Socket s) -> Handle {
+  auto fd = s.fd();
+  auto &slot = socketIndices[fd];
+  assert(!slot.occupied);
+  slot.socket = std::move(s);
+  slot.occupied = true;
+  pollFds_.emplace_back(fd, 0, 0);
+  slot.fdsIndex = pollFds_.size() - 1;
+  return {fd, slot.generation};
+}
+
 void IOContext::doRead(int fd) {
   assert(socketIndices.contains(fd));
   auto &slot = socketIndices.at(fd);
   auto &pollFd = pollFds_[slot.fdsIndex];
   assert(pollFd.fd == fd);
-  pollFd.revents &= ~POLLIN;
+  pollFd.events &= ~POLLIN;
   auto readable = std::exchange(slot.readable, nullptr);
   if (readable != nullptr) {
-    readable(slot.socket);
+    readable(*this, slot.handle(), slot.socket);
   }
 }
 
@@ -137,10 +83,10 @@ void IOContext::doWrite(int fd) {
   auto &slot = socketIndices.at(fd);
   auto &pollFd = pollFds_[slot.fdsIndex];
   assert(pollFd.fd == fd);
-  pollFd.revents &= ~POLLOUT;
+  pollFd.events &= ~POLLOUT;
   auto writeable = std::exchange(slot.writeable, nullptr);
   if (writeable != nullptr) {
-    writeable(slot.socket);
+    writeable(*this, slot.handle(), slot.socket);
   }
 }
 
