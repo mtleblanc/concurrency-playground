@@ -66,6 +66,25 @@ auto IOContext::watch(Socket s) -> Handle {
   return {fd, slot.generation};
 }
 
+auto IOContext::unwatch(Handle h) -> std::optional<Socket> {
+  if (!socketIndices.contains(h.fd)) {
+    return {};
+  }
+  auto &slot = socketIndices.at(h.fd);
+  if (!slot.occupied || slot.generation != h.generation) {
+    return {};
+  }
+  auto index = slot.fdsIndex;
+  auto endIndex = std::ssize(pollFds_) - 1;
+  auto &endSlot = socketIndices[pollFds_[endIndex].fd];
+  endSlot.fdsIndex = index;
+  slot.occupied = false;
+  ++slot.generation;
+  std::swap(pollFds_[index], pollFds_[endIndex]);
+  pollFds_.pop_back();
+  return std::move(slot.socket);
+}
+
 void IOContext::doRead(int fd) {
   assert(socketIndices.contains(fd));
   auto &slot = socketIndices.at(fd);

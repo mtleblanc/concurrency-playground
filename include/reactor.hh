@@ -35,6 +35,7 @@ public:
   void writeable(Handle, ReadyAction);
   std::optional<std::reference_wrapper<Socket>> get(Handle);
   Handle watch(Socket);
+  std::optional<Socket> unwatch(Handle);
 
 private:
   void doRead(int);

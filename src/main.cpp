@@ -120,6 +120,9 @@ void read_callback(IOContext &ctx, IOContext::Handle h, Socket &s) {
     buf.resize(n);
     std::println("Received: {}", buf);
     ctx.writeable(h, Writer{std::move(buf)});
+  } else if (n == 0) {
+    std::println("Connecion {} closed", s.fd());
+    ctx.unwatch(h);
   } else {
     std::println("Read returned {}", n);
     ctx.readable(h, read_callback);
