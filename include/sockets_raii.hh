@@ -1,7 +1,9 @@
 #pragma once
 
+#include <expected>
 #include <netdb.h>
 #include <string>
+#include <system_error>
 #include <unistd.h>
 #include <utility>
 
@@ -38,6 +40,10 @@ private:
   addrinfo *addressInfo_;
 };
 
+inline auto unexpectedErrno() {
+  return std::unexpected{std::make_error_code(static_cast<std::errc> errno)};
+}
+
 class Socket {
   int fd_{-1};
 
@@ -59,6 +65,30 @@ public:
 
   operator int() const { return fd_; }
   auto fd() const { return fd_; }
+
+  std::expected<Socket, std::error_code> accept() {
+    auto fd = ::accept(fd_, nullptr, nullptr);
+    if (fd < 0) {
+      return unexpectedErrno();
+    }
+    return Socket(fd);
+  }
+
+  std::expected<int, std::error_code> read(char *data, int dataSize) {
+    auto n = ::recv(fd_, data, dataSize, MSG_DONTWAIT);
+    if (n < 0) {
+      return unexpectedErrno();
+    }
+    return n;
+  }
+
+  std::expected<int, std::error_code> write(const char *data, int dataSize) {
+    auto n = ::send(fd_, data, dataSize, MSG_DONTWAIT);
+    if (n < 0) {
+      return unexpectedErrno();
+    }
+    return n;
+  }
 
 private:
   void release() {

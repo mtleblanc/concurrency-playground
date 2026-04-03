@@ -102,37 +102,44 @@ struct Writer {
   void operator()(IOContext &ctx, IOContext::Handle h, Socket &s) {
     auto sv = std::string_view{data};
     sv = sv.substr(sent);
-    auto n = ::send(s.fd(), sv.data(), sv.size(), MSG_DONTWAIT);
-    std::println("Sent: {}", sv.substr(0, n));
-    if (n < std::ssize(sv)) {
-      sent += n;
-      ctx.writeable(h, *this);
-    } else {
-      ctx.readable(h, read_callback);
+    auto res = s.write(sv.data(), sv.size());
+    if (res) {
+      auto n = res.value();
+      // std::println("Sent: {}", sv.substr(0, n));
+      if (n < std::ssize(sv)) {
+        sent += n;
+        ctx.writeable(h, *this);
+      } else {
+        ctx.readable(h, read_callback);
+      }
     }
   }
 };
 
 void read_callback(IOContext &ctx, IOContext::Handle h, Socket &s) {
   auto buf = std::string(1024, 0);
-  auto n = ::recv(s.fd(), buf.data(), buf.size(), MSG_DONTWAIT);
-  if (n > 0) {
-    buf.resize(n);
-    std::println("Received: {}", buf);
-    ctx.writeable(h, Writer{std::move(buf)});
-  } else if (n == 0) {
-    std::println("Connecion {} closed", s.fd());
-    ctx.unwatch(h);
+  auto res = s.read(buf.data(), buf.size());
+  if (res) {
+    auto n = res.value();
+    if (n > 0) {
+      buf.resize(n);
+      // std::println("Received: {}", buf);
+      ctx.writeable(h, Writer{std::move(buf)});
+    } else {
+      // std::println("Connecion {} closed", s.fd());
+      ctx.unwatch(h);
+    }
   } else {
-    std::println("Read returned {}", n);
+    // std::println("Read returned {}", res.error().message());
     ctx.readable(h, read_callback);
   }
 }
 void connect_callback(IOContext &ctx, IOContext::Handle h, Socket &s) {
-  auto newFd = ::accept(s.fd(), nullptr, nullptr);
-  std::println("Connected fd {}", newFd);
-  if (newFd >= 0) {
-    auto newHandle = ctx.watch({newFd});
+  auto res = s.accept();
+  if (res) {
+    auto newFd = std::move(res.value());
+    // std::println("Connected fd {}", newFd.fd());
+    auto newHandle = ctx.watch(std::move(newFd));
     ctx.readable(newHandle, read_callback);
   }
   ctx.readable(h, connect_callback);
@@ -147,7 +154,7 @@ void connect_callback(IOContext &ctx, IOContext::Handle h, Socket &s) {
 }
 
 int main() {
-  std::println("concurrency playground");
+  // std::println("concurrency playground");
   auto address = std::string{"0.0.0.0"};
   auto server = TcpServer{address, 12345};
   reactor(std::move(server));
