@@ -1,5 +1,7 @@
+#pragma once
 
 #include "sockets_raii.hh"
+#include "util.hh"
 #include <cassert>
 #include <expected>
 #include <functional>
@@ -8,16 +10,6 @@
 #include <system_error>
 
 namespace Asio {
-
-class MoveOnly {
-protected:
-  MoveOnly() = default;
-  MoveOnly(const MoveOnly &) = delete;
-  MoveOnly(MoveOnly &&) = default;
-  MoveOnly &operator=(const MoveOnly &) = delete;
-  MoveOnly &operator=(MoveOnly &&) = default;
-  ~MoveOnly() = default;
-};
 
 template <typename T>
 using Callback = std::function<void(std::expected<T, std::error_code>)>;
@@ -56,16 +48,4 @@ private:
   std::unordered_map<int, Slot> socketIndices{};
 };
 
-class ConnectedSocket : MoveOnly {
-public:
-  ConnectedSocket(IOContext &context, IOContext::Handle handle);
-  void read(char *buffer, int bufferSize, Callback<int>);
-  void write(char *buffer, int bufferSize, Callback<int>);
-};
-
-class ListeningSocket : MoveOnly {
-public:
-  ListeningSocket(IOContext &context, IOContext::Handle handle);
-  void accept(sockaddr *, socklen_t *, Callback<Socket>);
-};
 } // namespace Asio

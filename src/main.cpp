@@ -1,4 +1,5 @@
 #include "coroutine.hh"
+#include "proactor.hh"
 #include "reactor.hh"
 #include "socket.hh"
 #include <functional>
@@ -150,6 +151,32 @@ void connect_callback(IOContext &ctx, IOContext::Handle h, Socket &s) {
   IOContext ctx;
   auto serverHandle = ctx.watch(std::move(socket));
   ctx.readable(serverHandle, connect_callback);
+  ctx.run();
+}
+
+void proactor_accept_callback(
+    std::expected<ConnectedSocket, std::error_code> conn) {
+  if (!conn) {
+    std::print("{}", conn.error().message());
+    return;
+  }
+  // bad
+  auto buf = new std::string(1024, 0);
+  auto socket = new ConnectedSocket{std::move(*conn)};
+  socket->read(buf->data(), buf->size(),
+               [=](std::expected<int, std::error_code> res) {
+                 if (!res) {
+                   std::print("{}", res.error().message());
+                 }
+               });
+}
+
+[[maybe_unused]] void proactor(TcpServer server) {
+  auto socket = std::move(server.socket_);
+  IOContext ctx;
+  auto serverHandle = ctx.watch(std::move(socket));
+  auto listserv = ListeningSocket{ctx, serverHandle};
+  listserv.accept(nullptr, nullptr, proactor_accept_callback);
   ctx.run();
 }
 
