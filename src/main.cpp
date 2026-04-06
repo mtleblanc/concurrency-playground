@@ -156,7 +156,7 @@ void connect_callback(IOContext &ctx, IOContext::Handle h, Socket &s) {
 }
 
 static constexpr auto BUFSZ = 1024;
-class proactor_echo : std::enable_shared_from_this<proactor_echo> {
+class proactor_echo : public std::enable_shared_from_this<proactor_echo> {
   ConnectedSocket socket;
   std::string data;
   int index{};
@@ -204,6 +204,7 @@ public:
 };
 
 void proactor_accept_callback(
+    ListeningSocket &listserv,
     std::expected<ConnectedSocket, std::error_code> conn) {
   if (!conn) {
     std::println("{}", conn.error().message());
@@ -211,6 +212,9 @@ void proactor_accept_callback(
   }
   auto echoConnection = std::make_shared<proactor_echo>(std::move(*conn));
   echoConnection->startRead();
+  listserv.accept(nullptr, nullptr,
+                  std::bind(proactor_accept_callback, std::ref(listserv),
+                            std::placeholders::_1));
 }
 
 [[maybe_unused]] void proactor(TcpServer server) {
@@ -218,7 +222,9 @@ void proactor_accept_callback(
   IOContext ctx;
   auto serverHandle = ctx.watch(std::move(socket));
   auto listserv = ListeningSocket{ctx, serverHandle};
-  listserv.accept(nullptr, nullptr, proactor_accept_callback);
+  listserv.accept(nullptr, nullptr,
+                  std::bind(proactor_accept_callback, std::ref(listserv),
+                            std::placeholders::_1));
   ctx.run();
 }
 
