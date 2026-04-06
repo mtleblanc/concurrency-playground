@@ -3,6 +3,7 @@
 #include "reactor.hh"
 #include "socket.hh"
 #include <functional>
+#include <memory>
 #include <print>
 #include <sys/socket.h>
 
@@ -154,21 +155,62 @@ void connect_callback(IOContext &ctx, IOContext::Handle h, Socket &s) {
   ctx.run();
 }
 
+static constexpr auto BUFSZ = 1024;
+class proactor_echo : std::enable_shared_from_this<proactor_echo> {
+  ConnectedSocket socket;
+  std::string data;
+  int index{};
+
+public:
+  proactor_echo(ConnectedSocket s) : socket{std::move(s)}, data(BUFSZ, 0) {}
+
+  void startRead() {
+    index = 0;
+    data.resize(BUFSZ);
+    socket.read(data.data(), data.size(),
+                std::bind(&proactor_echo::handle_read, shared_from_this(),
+                          std::placeholders::_1));
+  }
+
+  void startWrite() {
+    auto sv = std::string_view{data};
+    sv = sv.substr(index);
+    if (sv.empty()) {
+      startRead();
+      return;
+    }
+    socket.write(sv.data(), sv.size(),
+                 std::bind(&proactor_echo::handle_write, shared_from_this(),
+                           std::placeholders::_1));
+  }
+
+  void handle_read(std::expected<int, std::error_code> res) {
+    if (!res) {
+      std::println("{}", res.error().message());
+      return;
+    }
+    data.resize(*res);
+    startWrite();
+  }
+
+  void handle_write(std::expected<int, std::error_code> res) {
+    if (!res) {
+      std::println("{}", res.error().message());
+      return;
+    }
+    index += *res;
+    startWrite();
+  }
+};
+
 void proactor_accept_callback(
     std::expected<ConnectedSocket, std::error_code> conn) {
   if (!conn) {
-    std::print("{}", conn.error().message());
+    std::println("{}", conn.error().message());
     return;
   }
-  // bad
-  auto buf = new std::string(1024, 0);
-  auto socket = new ConnectedSocket{std::move(*conn)};
-  socket->read(buf->data(), buf->size(),
-               [=](std::expected<int, std::error_code> res) {
-                 if (!res) {
-                   std::print("{}", res.error().message());
-                 }
-               });
+  auto echoConnection = std::make_shared<proactor_echo>(std::move(*conn));
+  echoConnection->startRead();
 }
 
 [[maybe_unused]] void proactor(TcpServer server) {
@@ -184,5 +226,5 @@ int main() {
   // std::println("concurrency playground");
   auto address = std::string{"0.0.0.0"};
   auto server = TcpServer{address, 12345};
-  reactor(std::move(server));
+  proactor(std::move(server));
 }

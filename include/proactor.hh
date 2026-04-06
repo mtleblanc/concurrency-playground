@@ -9,7 +9,7 @@ public:
   ConnectedSocket(IOContext &context, IOContext::Handle handle)
       : ctx_{&context}, handle_{handle} {}
   void read(char *buffer, int bufferSize, Callback<int>);
-  void write(char *buffer, int bufferSize, Callback<int>);
+  void write(const char *buffer, int bufferSize, Callback<int>);
 
 private:
   IOContext *ctx_;

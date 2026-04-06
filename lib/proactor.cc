@@ -9,7 +9,7 @@ void ConnectedSocket::read(char *buffer, int bufferSize,
   });
 }
 
-void ConnectedSocket::write(char *buffer, int bufferSize,
+void ConnectedSocket::write(const char *buffer, int bufferSize,
                             Callback<int> callback) {
   ctx_->writeable(handle_, [=]([[maybe_unused]] auto &ctx,
                                [[maybe_unused]] auto handle, auto &socket) {
