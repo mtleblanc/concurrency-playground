@@ -1,12 +1,60 @@
 #pragma once
 
 #include "proactor.hh"
-#include "socket.hh"
 #include <coroutine>
+#include <memory>
 #include <system_error>
 #include <utility>
 
 namespace Asio {
+
+class Task {
+public:
+  struct FinalAwaiter {
+    bool await_ready() const noexcept { return false; }
+    template <typename P>
+    void await_suspend(std::coroutine_handle<P> handle) noexcept {
+      handle.promise().next.resume();
+    }
+    void await_resume() const noexcept {}
+  };
+
+  struct Promise {
+    Task get_return_object() {
+      return Task{std::coroutine_handle<Promise>::from_promise(*this)};
+    }
+    void unhandled_exception() noexcept {}
+    void return_void() noexcept {}
+    std::suspend_never initial_suspend() noexcept { return {}; }
+    FinalAwaiter final_suspend() noexcept { return {}; }
+
+    std::coroutine_handle<> next;
+  };
+
+  struct Awaiter {
+    bool await_ready() const noexcept { return false; }
+    void await_suspend([[maybe_unused]] std::coroutine_handle<> calling) {
+      handle.promise().next = calling;
+    }
+    void await_resume() {}
+
+    std::coroutine_handle<Promise> handle;
+  };
+
+  Awaiter operator co_await() { return {handle_}; }
+  using promise_type = Promise;
+
+  explicit Task(std::coroutine_handle<Promise> handle) : handle_{handle} {}
+  ~Task() {
+    if (handle_) {
+      handle_.destroy();
+    }
+  }
+
+private:
+  std::coroutine_handle<Promise> handle_;
+};
+
 class AsioCoroutine {
 public:
   struct Promise {
@@ -51,8 +99,8 @@ private:
 
 class ProactorWriteAwaitable {
 public:
-  ProactorWriteAwaitable(std::shared_ptr<ConnectedSocket> socket, char *data,
-                         ssize_t dataSize)
+  ProactorWriteAwaitable(std::shared_ptr<ConnectedSocket> socket,
+                         const char *data, ssize_t dataSize)
       : socket_{std::move(socket)}, data_{data}, dataSize_{dataSize} {}
   auto operator co_await() {
     struct Awaiter {
@@ -75,7 +123,7 @@ public:
 
 private:
   std::shared_ptr<ConnectedSocket> socket_;
-  char *data_;
+  const char *data_;
   ssize_t dataSize_;
 };
 
@@ -107,88 +155,5 @@ public:
 
 private:
   std::shared_ptr<ListeningSocket> socket_;
-};
-
-class ReadAwaitable {
-public:
-  ReadAwaitable(std::shared_ptr<TcpAsio::Conn> conn) : conn{std::move(conn)} {}
-  auto operator co_await() {
-    struct Awaiter {
-      ReadAwaitable &awaitable;
-      std::pair<std::error_code, std::string> result{};
-
-      bool await_ready() const noexcept { return false; }
-      void await_suspend(std::coroutine_handle<> handle) noexcept {
-        awaitable.conn->read([this, handle](auto ec, auto &data) {
-          result = {ec, std::move(data)};
-          handle.resume();
-        });
-      }
-
-      std::pair<std::error_code, std::string> await_resume() const noexcept {
-        return result;
-      }
-    };
-    return Awaiter{*this};
-  }
-
-private:
-  std::shared_ptr<TcpAsio::Conn> conn;
-};
-
-class WriteAwaitable {
-public:
-  WriteAwaitable(std::shared_ptr<TcpAsio::Conn> conn, std::string data)
-      : conn{std::move(conn)}, data{std::move(data)} {}
-  auto operator co_await() {
-    struct Awaiter {
-      WriteAwaitable &awaitable;
-      std::error_code result{};
-
-      bool await_ready() const noexcept { return false; }
-      void await_suspend(std::coroutine_handle<> handle) noexcept {
-        awaitable.conn->write(std::move(awaitable.data),
-                              [this, handle](auto ec) {
-                                result = std::move(ec);
-                                handle.resume();
-                              });
-      }
-
-      std::error_code await_resume() const noexcept { return result; }
-    };
-    return Awaiter{*this};
-  }
-
-private:
-  std::shared_ptr<TcpAsio::Conn> conn;
-  std::string data;
-};
-
-class AcceptAwaitable {
-public:
-  AcceptAwaitable(std::shared_ptr<TcpAsio::ReactorServer> conn)
-      : conn_{std::move(conn)} {}
-  auto operator co_await() {
-    struct Awaiter {
-      using Result = std::pair<std::error_code, std::shared_ptr<TcpAsio::Conn>>;
-      AcceptAwaitable &awaitable;
-      Result result{};
-
-      bool await_ready() const noexcept { return false; }
-      void
-      await_suspend([[maybe_unused]] std::coroutine_handle<> handle) noexcept {
-        awaitable.conn_->accept([this, handle](auto ec, auto conn) {
-          result = {ec, conn};
-          handle.resume();
-        });
-      }
-
-      Result await_resume() const noexcept { return result; }
-    };
-    return Awaiter{*this};
-  }
-
-private:
-  std::shared_ptr<TcpAsio::ReactorServer> conn_;
 };
 } // namespace Asio
