@@ -228,9 +228,52 @@ void proactor_accept_callback(
   ctx.run();
 }
 
+AsioCoroutine proactor_coro_echo(ConnectedSocket socket) {
+  std::string buf(1024, 0);
+  auto conn = std::make_shared<ConnectedSocket>(std::move(socket));
+  for (;;) {
+    buf.resize(1024);
+    auto readResult =
+        co_await ProactorReadAwaitable{conn, buf.data(), std::ssize(buf)};
+    if (!readResult) {
+      std::println("{}", readResult.error().message());
+      continue;
+    }
+    if (*readResult == 0) {
+      break;
+    }
+    buf.resize(*readResult);
+    auto writeResult =
+        co_await ProactorWriteAwaitable(conn, buf.data(), std::ssize(buf));
+    if (!writeResult) {
+      std::println("{}", writeResult.error().message());
+    }
+  }
+}
+
+AsioCoroutine proactor_coro_listen(std::shared_ptr<ListeningSocket> listserv) {
+
+  for (;;) {
+    auto socket = co_await ProactorAcceptAwaitable{listserv};
+    if (!socket) {
+      std::println("{}", socket.error().message());
+      continue;
+    }
+    proactor_coro_echo(std::move(*socket));
+  }
+}
+
+[[maybe_unused]] void proactor_coro(TcpServer server) {
+  IOContext ctx;
+  auto serverHandle = ctx.watch(std::move(server.socket_));
+  auto listserv = std::make_shared<ListeningSocket>(ctx, serverHandle);
+  proactor_coro_listen(listserv);
+  ctx.run();
+}
+
 int main() {
   // std::println("concurrency playground");
   auto address = std::string{"0.0.0.0"};
   auto server = TcpServer{address, 12345};
-  proactor(std::move(server));
+  proactor_coro(std::move(server));
 }

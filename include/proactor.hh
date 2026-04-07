@@ -6,6 +6,7 @@
 namespace Asio {
 class ConnectedSocket : MoveOnly {
 public:
+  ConnectedSocket() = default;
   ConnectedSocket(IOContext &context, IOContext::Handle handle)
       : ctx_{&context}, handle_{handle} {}
   void read(char *buffer, int bufferSize, Callback<int>);
