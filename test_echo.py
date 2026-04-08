@@ -9,6 +9,7 @@ import os
 import socket
 import sys
 import threading
+import time
 
 
 HOST = "127.0.0.1"
@@ -16,13 +17,26 @@ PORT = 12345
 CHUNK = 65536  # send/recv in 64 KiB chunks
 
 
-def run_connection(conn_id: int, data: bytes, results: list, errors: list) -> None:
+def run_connection(
+    conn_id: int,
+    data: bytes,
+    results: list,
+    errors: list,
+    records: list | None,
+    start_time: float,
+    timeout: float | None,
+) -> None:
+    def log(op: str, nbytes: int) -> None:
+        if records is not None:
+            records.append((time.perf_counter() - start_time, conn_id, op, nbytes))
+
+    log("send", 0)
     try:
         with socket.create_connection((HOST, PORT)) as sock:
             total = len(data)
             sent = 0
             received = bytearray()
-
+            log("send", 0)
             # Send all data, receiving whatever arrives in between to avoid
             # blocking if the server's send buffer fills (deadlock avoidance).
             while sent < total or len(received) < total:
@@ -30,29 +44,41 @@ def run_connection(conn_id: int, data: bytes, results: list, errors: list) -> No
                     chunk = data[sent : sent + CHUNK]
                     n = sock.send(chunk)
                     sent += n
+                    log("send", n)
 
                 # Non-blocking drain
                 sock.setblocking(False)
+                drained = 0
                 try:
                     while True:
                         chunk = sock.recv(CHUNK)
                         if not chunk:
                             break
                         received.extend(chunk)
+                        drained += len(chunk)
                 except BlockingIOError:
                     pass
-                sock.setblocking(True)
+                sock.settimeout(timeout)
+                if drained:
+                    log("recv", drained)
 
                 if sent == total and len(received) < total:
                     # Nothing left to send; just wait for the rest
                     remaining = total - len(received)
-                    chunk = sock.recv(min(CHUNK, remaining))
+                    try:
+                        chunk = sock.recv(min(CHUNK, remaining))
+                    except TimeoutError:
+                        raise TimeoutError(
+                            f"[{conn_id}] No data from server for {timeout}s "
+                            f"({len(received)}/{total} bytes received)"
+                        )
                     if not chunk:
                         raise ConnectionError(
                             f"[{conn_id}] Server closed connection after "
                             f"{len(received)}/{total} bytes received"
                         )
                     received.extend(chunk)
+                    log("recv", len(chunk))
 
             if bytes(received) == data:
                 results.append(conn_id)
@@ -94,10 +120,23 @@ def main() -> None:
         metavar="BYTES",
         help="bytes to send per connection (default: 1048576 = 1 MiB)",
     )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="print per-event send/recv timeline after completion",
+    )
+    parser.add_argument(
+        "-t", "--timeout",
+        type=float,
+        default=10.0,
+        metavar="SECS",
+        help="seconds to wait for echo data before failing (default: 10, 0 = no timeout)",
+    )
     args = parser.parse_args()
 
     n_conns = args.connections
     data_size = args.size
+    timeout = args.timeout or None  # 0 → None (no timeout)
 
     print(f"Echo test: {n_conns} connection(s), {data_size:,} bytes each → {HOST}:{PORT}")
 
@@ -106,21 +145,16 @@ def main() -> None:
 
     results: list[int] = []
     errors: list[str] = []
-    lock = threading.Lock()
 
-    # Thread-safe wrappers
-    def safe_result(cid: int) -> None:
-        with lock:
-            results.append(cid)
+    # Each thread gets its own records list; merged after join (no locking needed).
+    per_thread_records: list[list] = [[] if args.verbose else None for _ in range(n_conns)]
 
-    def safe_error(msg: str) -> None:
-        with lock:
-            errors.append(msg)
+    start_time = time.perf_counter()
 
     threads = [
         threading.Thread(
             target=run_connection,
-            args=(i, payloads[i], results, errors),
+            args=(i, payloads[i], results, errors, per_thread_records[i], start_time, timeout),
             daemon=True,
         )
         for i in range(n_conns)
@@ -140,6 +174,21 @@ def main() -> None:
         print("\nErrors:")
         for e in errors:
             print(f"  {e}", file=sys.stderr)
+
+    if args.verbose:
+        all_records = sorted(
+            (r for thread_records in per_thread_records for r in thread_records),
+            key=lambda r: r[0],
+        )
+        print(f"\n{'Time (ms)':>10}  {'Conn':>4}  {'Op':>4}  {'Bytes':>10}  {'Cumulative':>10}")
+        cumulative = [0] * n_conns
+        for ts, conn_id, op, nbytes in all_records:
+            cumulative[conn_id] += nbytes if op == "recv" else 0
+            print(
+                f"{ts * 1000:>10.1f}  {conn_id:>4}  {op:>4}  {nbytes:>10,}  {cumulative[conn_id]:>10,}"
+            )
+
+    if errors:
         sys.exit(1)
 
 
