@@ -32,6 +32,9 @@ constexpr static addrinfo hints = [] {
 Socket Socket::listenOn(std::string &address, int port) {
   Socket socket_{AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP};
   auto addressInfo_ = AddressInfo{address, port, &hints};
+  if (!socket_.reuseAddress()) {
+    std::println("Could not reuse address");
+  }
   if (::bind(socket_, addressInfo_->ai_addr, addressInfo_->ai_addrlen)) {
     throw std::bad_alloc{};
   }
@@ -41,12 +44,18 @@ Socket Socket::listenOn(std::string &address, int port) {
   return socket_;
 }
 
-std::expected<int, std::error_code> result(int res) {
+template <typename T> std::expected<T, std::error_code> result(T res) {
   if (res < 0) {
     return std::unexpected{std::make_error_code(static_cast<std::errc> errno)};
   }
   return res;
 }
+
+struct Ignore {
+  template <typename T> void operator()([[maybe_unused]] T _) const noexcept {}
+};
+
+static constexpr Ignore ignore{};
 
 Result<Socket> Socket::accept(sockaddr *addr, socklen_t *socklen) {
   return result(::accept(fd_, addr, socklen));
@@ -61,12 +70,16 @@ Result<ssize_t> Socket::write(const char *data, size_t dataSize, int flags) {
 }
 
 Result<void> Socket::bind(const sockaddr *addr, socklen_t socklen) {
-  return result(::bind(fd_, addr, socklen))
-      .transform([]([[maybe_unused]] auto _) {});
+  return result(::bind(fd_, addr, socklen)).transform(ignore);
 }
 
 Result<void> Socket::listen(int backlog) {
-  return result(::listen(fd_, backlog)).transform([]([[maybe_unused]] auto _) {
-  });
+  return result(::listen(fd_, backlog)).transform(ignore);
+}
+
+Result<void> Socket::reuseAddress() {
+  const int enable = 1;
+  return result(setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)))
+      .transform(ignore);
 }
 } // namespace Asio

@@ -75,6 +75,8 @@ public:
   Result<void> bind(const sockaddr *addr, socklen_t socklen);
   Result<void> listen(int backlog);
 
+  Result<void> reuseAddress();
+
 private:
   void release() {
     if (fd_ != -1) {
