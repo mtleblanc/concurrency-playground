@@ -1,5 +1,6 @@
 #include "socket.hh"
 #include <print>
+#include <sys/socket.h>
 
 namespace Asio {
 AddressInfo::AddressInfo(std::string &address, int port,
@@ -38,5 +39,34 @@ Socket Socket::listenOn(std::string &address, int port) {
     throw std::bad_alloc{};
   }
   return socket_;
+}
+
+std::expected<int, std::error_code> result(int res) {
+  if (res < 0) {
+    return std::unexpected{std::make_error_code(static_cast<std::errc> errno)};
+  }
+  return res;
+}
+
+Result<Socket> Socket::accept(sockaddr *addr, socklen_t *socklen) {
+  return result(::accept(fd_, addr, socklen));
+}
+
+Result<ssize_t> Socket::read(char *data, size_t dataSize, int flags) {
+  return result(::recv(fd_, data, dataSize, flags));
+}
+
+Result<ssize_t> Socket::write(const char *data, size_t dataSize, int flags) {
+  return result(::send(fd_, data, dataSize, flags));
+}
+
+Result<void> Socket::bind(const sockaddr *addr, socklen_t socklen) {
+  return result(::bind(fd_, addr, socklen))
+      .transform([]([[maybe_unused]] auto _) {});
+}
+
+Result<void> Socket::listen(int backlog) {
+  return result(::listen(fd_, backlog)).transform([]([[maybe_unused]] auto _) {
+  });
 }
 } // namespace Asio

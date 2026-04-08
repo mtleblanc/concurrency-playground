@@ -44,10 +44,6 @@ private:
   addrinfo *addressInfo_;
 };
 
-inline auto unexpectedErrno() {
-  return std::unexpected{std::make_error_code(static_cast<std::errc> errno)};
-}
-
 class Socket {
   int fd_{-1};
 
@@ -72,45 +68,12 @@ public:
   operator int() const { return fd_; }
   auto fd() const { return fd_; }
 
-  Result<Socket> accept() {
-    auto fd = ::accept(fd_, nullptr, nullptr);
-    if (fd < 0) {
-      return unexpectedErrno();
-    }
-    return Socket(fd);
-  }
-
-  Result<int> read(char *data, int dataSize) {
-    auto n = ::recv(fd_, data, dataSize, MSG_DONTWAIT);
-    if (n < 0) {
-      return unexpectedErrno();
-    }
-    return n;
-  }
-
-  Result<int> write(const char *data, int dataSize) {
-    auto n = ::send(fd_, data, dataSize, MSG_DONTWAIT);
-    if (n < 0) {
-      return unexpectedErrno();
-    }
-    return n;
-  }
-
-  Result<void> bind(const sockaddr *addr, socklen_t socklen) {
-    auto n = ::bind(fd_, addr, socklen);
-    if (n < 0) {
-      return unexpectedErrno();
-    }
-    return {};
-  }
-
-  Result<void> listen(int backlog) {
-    auto n = ::listen(fd_, backlog);
-    if (n < 0) {
-      return unexpectedErrno();
-    }
-    return {};
-  }
+  Result<Socket> accept(sockaddr *addr = nullptr, socklen_t *socklen = nullptr);
+  Result<ssize_t> read(char *data, size_t dataSize, int flags = MSG_DONTWAIT);
+  Result<ssize_t> write(const char *data, size_t dataSize,
+                        int flags = MSG_DONTWAIT);
+  Result<void> bind(const sockaddr *addr, socklen_t socklen);
+  Result<void> listen(int backlog);
 
 private:
   void release() {
