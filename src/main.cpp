@@ -60,8 +60,8 @@ void connect_callback(IOContext &ctx, IOContext::Handle h, Socket &s) {
   ctx.readable(h, connect_callback);
 }
 
-[[maybe_unused]] void reactor(TcpServer server) {
-  auto socket = std::move(server.socket_);
+[[maybe_unused]] void reactor(Socket server) {
+  auto socket = std::move(server);
   IOContext ctx;
   auto serverHandle = ctx.watch(std::move(socket));
   ctx.readable(serverHandle, connect_callback);
@@ -128,8 +128,8 @@ void proactor_accept_callback(ListeningSocket &listserv,
                             std::placeholders::_1));
 }
 
-[[maybe_unused]] void proactor(TcpServer server) {
-  auto socket = std::move(server.socket_);
+[[maybe_unused]] void proactor(Socket server) {
+  auto socket = std::move(server);
   IOContext ctx;
   auto serverHandle = ctx.watch(std::move(socket));
   auto listserv = ListeningSocket{ctx, serverHandle};
@@ -183,9 +183,9 @@ AsioCoroutine proactor_coro_listen(std::shared_ptr<ListeningSocket> listserv) {
   }
 }
 
-[[maybe_unused]] void proactor_coro(TcpServer server) {
+[[maybe_unused]] void proactor_coro(Socket server) {
   IOContext ctx;
-  auto serverHandle = ctx.watch(std::move(server.socket_));
+  auto serverHandle = ctx.watch(std::move(server));
   auto listserv = std::make_shared<ListeningSocket>(ctx, serverHandle);
   proactor_coro_listen(listserv);
   ctx.run();
@@ -194,6 +194,8 @@ AsioCoroutine proactor_coro_listen(std::shared_ptr<ListeningSocket> listserv) {
 int main() {
   // std::println("concurrency playground");
   auto address = std::string{"0.0.0.0"};
-  auto server = TcpServer{address, 12345};
-  proactor_coro(std::move(server));
+  auto socket = Socket::listenOn(address, 12345);
+  reactor(std::move(socket));
+  proactor(std::move(socket));
+  proactor_coro(std::move(socket));
 }

@@ -1,174 +1,123 @@
 #pragma once
 
-#include "sockets_raii.hh"
 #include "util.hh"
-
 #include <cstring>
 #include <expected>
-#include <functional>
-#include <map>
-#include <memory>
 #include <netdb.h>
 #include <poll.h>
 #include <print>
 #include <string>
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <system_error>
 #include <unistd.h>
 #include <utility>
-#include <vector>
 
 namespace Asio {
-
-class TcpServer {
+class AddressInfo {
 public:
-  TcpServer(std::string &address, int port);
+  AddressInfo() {}
+  AddressInfo(std::string &address, int port, const addrinfo *hints = nullptr);
+  AddressInfo(const AddressInfo &) = delete;
+  AddressInfo(AddressInfo &&o)
+      : addressInfo_{std::exchange(o.addressInfo_, nullptr)} {}
+  AddressInfo &operator=(const AddressInfo &) = delete;
+  AddressInfo &operator=(AddressInfo &&o) {
+    if (this != &o) {
+      release();
+      addressInfo_ = std::exchange(o.addressInfo_, nullptr);
+    }
+    return *this;
+  };
+  ~AddressInfo() { release(); }
 
-  int fd() const { return socket_; }
-  Result<std::shared_ptr<Socket>> accept() const;
-
-  Socket socket_;
-};
-
-class Monitor;
-class Multiplex;
-
-class Monitor {
-public:
-  Monitor(const Monitor &) = delete;
-  Monitor(Monitor &&) = default;
-  Monitor &operator=(const Monitor &) = delete;
-  Monitor &operator=(Monitor &&) = default;
-  ~Monitor() = default;
-
-  using Action = std::function<bool()>;
-  void onReadReady(Action f);
-  void onWriteReady(Action f);
-  void read();
-  void write();
+  auto *operator*() { return addressInfo_; }
+  auto *operator->() { return addressInfo_; }
 
 private:
-  friend class Multiplex;
-  Monitor(int fd, Multiplex *mp) : fd_{fd}, mp_{mp} {}
+  void release() {
+    if (addressInfo_ != nullptr) {
+      ::freeaddrinfo(addressInfo_);
+    }
+    addressInfo_ = nullptr;
+  }
 
-  int fd_;
-  Multiplex *mp_;
-  std::optional<Action> onReadReady_;
-  std::optional<Action> onWriteReady_;
+  addrinfo *addressInfo_;
 };
 
-class Multiplex {
+inline auto unexpectedErrno() {
+  return std::unexpected{std::make_error_code(static_cast<std::errc> errno)};
+}
+
+class Socket {
+  int fd_{-1};
+
 public:
-  void doPoll();
-  void run();
-  std::shared_ptr<Monitor> monitor(int fd);
-  void enableRead(int fd);
-  void enableWrite(int fd);
-  void disableRead(int fd);
-  void disableWrite(int fd);
+  Socket() {}
+  Socket(int fd) : fd_{fd} {}
+  Socket(int domain, int type, int proto);
+  Socket(const Socket &) = delete;
+  Socket(Socket &&o) : fd_{std::exchange(o.fd_, -1)} {}
+  Socket &operator=(const Socket &) = delete;
+  Socket &operator=(Socket &&o) {
+    if (this != &o) {
+      release();
+      fd_ = std::exchange(o.fd_, -1);
+    }
+    return *this;
+  };
+  ~Socket() { release(); }
+
+  static Socket listenOn(std::string &address, int port);
+
+  operator int() const { return fd_; }
+  auto fd() const { return fd_; }
+
+  Result<Socket> accept() {
+    auto fd = ::accept(fd_, nullptr, nullptr);
+    if (fd < 0) {
+      return unexpectedErrno();
+    }
+    return Socket(fd);
+  }
+
+  Result<int> read(char *data, int dataSize) {
+    auto n = ::recv(fd_, data, dataSize, MSG_DONTWAIT);
+    if (n < 0) {
+      return unexpectedErrno();
+    }
+    return n;
+  }
+
+  Result<int> write(const char *data, int dataSize) {
+    auto n = ::send(fd_, data, dataSize, MSG_DONTWAIT);
+    if (n < 0) {
+      return unexpectedErrno();
+    }
+    return n;
+  }
+
+  Result<void> bind(const sockaddr *addr, socklen_t socklen) {
+    auto n = ::bind(fd_, addr, socklen);
+    if (n < 0) {
+      return unexpectedErrno();
+    }
+    return {};
+  }
+
+  Result<void> listen(int backlog) {
+    auto n = ::listen(fd_, backlog);
+    if (n < 0) {
+      return unexpectedErrno();
+    }
+    return {};
+  }
 
 private:
-  std::map<int, std::shared_ptr<Monitor>> sockets_{};
-  std::map<int, int> fdToIndex_{};
-  std::vector<pollfd> fds_{};
-};
-
-class ReactiveAsio {
-  class Conn;
-  using ReadFunction = std::function<void(std::error_code, std::string &)>;
-  using WriteFunction = std::function<void(std::error_code)>;
-  using ReadyFunction = std::function<bool()>;
-  using AcceptFunction =
-      std::function<void(std::error_code, std::shared_ptr<Conn>)>;
-
-  class Conn {
-  public:
-    Conn(std::shared_ptr<Monitor> mon, std::shared_ptr<Socket> socket)
-        : mon_{mon}, socket_{socket} {}
-
-    void read(ReadFunction f);
-    void write(std::string data, WriteFunction f);
-
-  private:
-    std::shared_ptr<Monitor> mon_;
-    std::shared_ptr<Socket> socket_;
-  };
-
-  class ReactorServer {
-  public:
-    ReactorServer(Multiplex *mp, std::shared_ptr<Monitor> mon, TcpServer server)
-        : mp_{mp}, mon_{mon}, server_{std::move(server)} {}
-
-    void accept(AcceptFunction f);
-
-  private:
-    Multiplex *mp_;
-    std::shared_ptr<Monitor> mon_;
-    TcpServer server_;
-  };
-
-private:
-  struct Reader;
-  struct Writer;
-  struct Acceptor;
-
-  Multiplex multiplex_;
-};
-
-class TcpAsio {
-public:
-  class Conn;
-  using ReadFunction = std::function<void(std::error_code, std::string &)>;
-  using WriteFunction = std::function<void(std::error_code)>;
-  using ReadyFunction = std::function<bool()>;
-  using AcceptFunction =
-      std::function<void(std::error_code, std::shared_ptr<Conn>)>;
-
-  class Conn {
-  public:
-    Conn(std::shared_ptr<Monitor> mon, std::shared_ptr<Socket> socket)
-        : mon_{mon}, socket_{socket} {}
-
-    void read(ReadFunction f);
-    void write(std::string data, WriteFunction f);
-
-  private:
-    std::shared_ptr<Monitor> mon_;
-    std::shared_ptr<Socket> socket_;
-  };
-
-  class ReactorServer {
-  public:
-    ReactorServer(Multiplex *mp, std::shared_ptr<Monitor> mon, TcpServer server)
-        : mp_{mp}, mon_{mon}, server_{std::move(server)} {}
-
-    void accept(AcceptFunction f);
-
-  private:
-    Multiplex *mp_;
-    std::shared_ptr<Monitor> mon_;
-    TcpServer server_;
-  };
-
-  class Server {
-  public:
-    Server(TcpServer server, std::function<void(Conn)> onAccept);
-
-    void run() { mp.run(); }
-
-  private:
-    TcpServer server_;
-    Multiplex mp;
-    std::shared_ptr<Monitor> serverMonitor_;
-    std::function<void(Conn)> onAccept_;
-  };
-
-private:
-  struct Reader;
-  struct Writer;
-  struct Acceptor;
-
-  Multiplex multiplex_;
+  void release() {
+    if (fd_ != -1) {
+      ::close(fd_);
+    }
+    fd_ = -1;
+  }
 };
 } // namespace Asio
