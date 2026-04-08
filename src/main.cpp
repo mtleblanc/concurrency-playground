@@ -8,6 +8,7 @@
 #include <sys/socket.h>
 
 using namespace Asio;
+constexpr auto BUFSZ = 64 * 1024;
 
 void read_callback(IOContext &ctx, IOContext::Handle h, Socket &s);
 struct Writer {
@@ -31,7 +32,7 @@ struct Writer {
 };
 
 void read_callback(IOContext &ctx, IOContext::Handle h, Socket &s) {
-  auto buf = std::string(1024, 0);
+  auto buf = std::string(BUFSZ, 0);
   auto res = s.read(buf.data(), buf.size());
   if (res) {
     auto n = res.value();
@@ -67,7 +68,6 @@ void connect_callback(IOContext &ctx, IOContext::Handle h, Socket &s) {
   ctx.run();
 }
 
-static constexpr auto BUFSZ = 1024;
 class proactor_echo : public std::enable_shared_from_this<proactor_echo> {
   ConnectedSocket socket;
   std::string data;
@@ -96,7 +96,7 @@ public:
                            std::placeholders::_1));
   }
 
-  void handle_read(std::expected<int, std::error_code> res) {
+  void handle_read(Result<int> res) {
     if (!res) {
       std::println("{}", res.error().message());
       return;
@@ -105,7 +105,7 @@ public:
     startWrite();
   }
 
-  void handle_write(std::expected<int, std::error_code> res) {
+  void handle_write(Result<int> res) {
     if (!res) {
       std::println("{}", res.error().message());
       return;
@@ -115,9 +115,8 @@ public:
   }
 };
 
-void proactor_accept_callback(
-    ListeningSocket &listserv,
-    std::expected<ConnectedSocket, std::error_code> conn) {
+void proactor_accept_callback(ListeningSocket &listserv,
+                              Result<ConnectedSocket> conn) {
   if (!conn) {
     std::println("{}", conn.error().message());
     return;
@@ -144,8 +143,8 @@ Task proactor_coro_send_all(std::shared_ptr<ConnectedSocket> conn,
                             std::string &buf) {
 
   for (auto sv = std::string_view{buf}; !sv.empty();) {
-    auto writeResult = co_await ProactorWriteAwaitable(
-        conn, sv.data(), std::min(100Z, std::ssize(sv)));
+    auto writeResult =
+        co_await ProactorWriteAwaitable(conn, sv.data(), std::ssize(sv));
     if (!writeResult) {
       std::println("{}", writeResult.error().message());
     }
@@ -154,10 +153,10 @@ Task proactor_coro_send_all(std::shared_ptr<ConnectedSocket> conn,
 }
 
 AsioCoroutine proactor_coro_echo(ConnectedSocket socket) {
-  std::string buf(1024, 0);
+  std::string buf(BUFSZ, 0);
   auto conn = std::make_shared<ConnectedSocket>(std::move(socket));
   for (;;) {
-    buf.resize(1024);
+    buf.resize(BUFSZ);
     auto readResult =
         co_await ProactorReadAwaitable{conn, buf.data(), std::ssize(buf)};
     if (!readResult) {

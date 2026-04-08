@@ -7,12 +7,8 @@
 #include <functional>
 #include <optional>
 #include <poll.h>
-#include <system_error>
 
 namespace Asio {
-
-template <typename T>
-using Callback = std::function<void(std::expected<T, std::error_code>)>;
 
 class IOContext : MoveOnly {
 public:

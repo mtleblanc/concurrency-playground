@@ -34,7 +34,7 @@ TcpServer::TcpServer(std::string &address, int port)
   if (::bind(socket_, addressInfo_->ai_addr, addressInfo_->ai_addrlen)) {
     throw std::bad_alloc{};
   }
-  if (::listen(socket_, 0)) {
+  if (::listen(socket_, SOMAXCONN)) {
     throw std::bad_alloc{};
   }
 }

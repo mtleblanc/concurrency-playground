@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sockets_raii.hh"
+#include "util.hh"
 
 #include <cstring>
 #include <expected>
@@ -19,8 +20,6 @@
 #include <vector>
 
 namespace Asio {
-
-template <typename T> using Result = std::expected<T, std::error_code>;
 
 class TcpServer {
 public:

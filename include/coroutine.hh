@@ -3,7 +3,6 @@
 #include "proactor.hh"
 #include <coroutine>
 #include <memory>
-#include <system_error>
 #include <utility>
 
 namespace Asio {
@@ -75,18 +74,17 @@ public:
   auto operator co_await() {
     struct Awaiter {
       ProactorReadAwaitable &awaitable;
-      std::expected<int, std::error_code> result{};
+      Result<int> result{};
 
       bool await_ready() const noexcept { return false; }
       void await_suspend(std::coroutine_handle<> handle) noexcept {
-        awaitable.socket_->read(
-            awaitable.data_, awaitable.dataSize_,
-            [this, handle](std::expected<int, std::error_code> res) {
-              result = res;
-              handle.resume();
-            });
+        awaitable.socket_->read(awaitable.data_, awaitable.dataSize_,
+                                [this, handle](Result<int> res) {
+                                  result = res;
+                                  handle.resume();
+                                });
       }
-      std::expected<int, std::error_code> await_resume() { return result; }
+      Result<int> await_resume() { return result; }
     };
     return Awaiter{*this};
   }
@@ -105,18 +103,17 @@ public:
   auto operator co_await() {
     struct Awaiter {
       ProactorWriteAwaitable &awaitable;
-      std::expected<int, std::error_code> result{};
+      Result<int> result{};
 
       bool await_ready() const noexcept { return false; }
       void await_suspend(std::coroutine_handle<> handle) noexcept {
-        awaitable.socket_->write(
-            awaitable.data_, awaitable.dataSize_,
-            [this, handle](std::expected<int, std::error_code> res) {
-              result = res;
-              handle.resume();
-            });
+        awaitable.socket_->write(awaitable.data_, awaitable.dataSize_,
+                                 [this, handle](Result<int> res) {
+                                   result = res;
+                                   handle.resume();
+                                 });
       }
-      std::expected<int, std::error_code> await_resume() { return result; }
+      Result<int> await_resume() { return result; }
     };
     return Awaiter{*this};
   }
@@ -134,21 +131,17 @@ public:
   auto operator co_await() {
     struct Awaiter {
       ProactorAcceptAwaitable &awaitable;
-      std::expected<ConnectedSocket, std::error_code> result{};
+      Result<ConnectedSocket> result{};
 
       bool await_ready() const noexcept { return false; }
       void await_suspend(std::coroutine_handle<> handle) noexcept {
-        awaitable.socket_->accept(
-            nullptr, nullptr,
-            [this,
-             handle](std::expected<ConnectedSocket, std::error_code> res) {
-              result = std::move(res);
-              handle.resume();
-            });
+        awaitable.socket_->accept(nullptr, nullptr,
+                                  [this, handle](Result<ConnectedSocket> res) {
+                                    result = std::move(res);
+                                    handle.resume();
+                                  });
       }
-      std::expected<ConnectedSocket, std::error_code> await_resume() {
-        return std::move(result);
-      }
+      Result<ConnectedSocket> await_resume() { return std::move(result); }
     };
     return Awaiter{*this};
   }
