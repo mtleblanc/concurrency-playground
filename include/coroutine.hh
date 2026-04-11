@@ -66,87 +66,56 @@ public:
   using promise_type = Promise;
 };
 
-class ProactorReadAwaitable {
+template <typename AsyncObject, typename T, typename... Args>
+class AsyncAwaitable {
 public:
-  ProactorReadAwaitable(std::shared_ptr<ConnectedSocket> socket, char *data,
-                        ssize_t dataSize)
-      : socket_{std::move(socket)}, data_{data}, dataSize_{dataSize} {}
+  using Fn = void (AsyncObject::*)(Args..., std::function<void(Result<T>)>);
+  AsyncAwaitable(std::shared_ptr<AsyncObject> socket, Fn fn, Args... args)
+      : obj_{std::move(socket)}, fn_{fn}, args_{std::forward<Args>(args)...} {}
   auto operator co_await() {
     struct Awaiter {
-      ProactorReadAwaitable &awaitable;
-      Result<int> result{};
+      AsyncAwaitable &awaitable;
+      Result<T> result{};
 
       bool await_ready() const noexcept { return false; }
       void await_suspend(std::coroutine_handle<> handle) noexcept {
-        awaitable.socket_->read(awaitable.data_, awaitable.dataSize_,
-                                [this, handle](Result<int> res) {
-                                  result = res;
-                                  handle.resume();
-                                });
+        std::apply(
+            [&](auto &...args) {
+              std::invoke(awaitable.fn_, awaitable.obj_, args...,
+                          [this, handle](Result<T> res) {
+                            result = std::move(res);
+                            handle.resume();
+                          });
+            },
+            awaitable.args_);
       }
-      Result<int> await_resume() { return result; }
+      Result<T> await_resume() { return std::move(result); }
     };
     return Awaiter{*this};
   }
 
 private:
-  std::shared_ptr<ConnectedSocket> socket_;
-  char *data_;
-  ssize_t dataSize_;
+  std::shared_ptr<AsyncObject> obj_;
+  Fn fn_;
+  std::tuple<Args...> args_;
 };
 
-class ProactorWriteAwaitable {
-public:
-  ProactorWriteAwaitable(std::shared_ptr<ConnectedSocket> socket,
-                         const char *data, ssize_t dataSize)
-      : socket_{std::move(socket)}, data_{data}, dataSize_{dataSize} {}
-  auto operator co_await() {
-    struct Awaiter {
-      ProactorWriteAwaitable &awaitable;
-      Result<int> result{};
+inline auto coroRead(std::shared_ptr<ConnectedSocket> socket, char *data,
+                     int dataSize) {
+  return AsyncAwaitable<ConnectedSocket, int, char *, int>{
+      socket, &ConnectedSocket::read, data, dataSize};
+}
 
-      bool await_ready() const noexcept { return false; }
-      void await_suspend(std::coroutine_handle<> handle) noexcept {
-        awaitable.socket_->write(awaitable.data_, awaitable.dataSize_,
-                                 [this, handle](Result<int> res) {
-                                   result = res;
-                                   handle.resume();
-                                 });
-      }
-      Result<int> await_resume() { return result; }
-    };
-    return Awaiter{*this};
-  }
+inline auto coroWrite(std::shared_ptr<ConnectedSocket> socket, const char *data,
+                      int dataSize) {
+  return AsyncAwaitable<ConnectedSocket, int, const char *, int>{
+      socket, &ConnectedSocket::write, data, dataSize};
+}
 
-private:
-  std::shared_ptr<ConnectedSocket> socket_;
-  const char *data_;
-  ssize_t dataSize_;
-};
-
-class ProactorAcceptAwaitable {
-public:
-  ProactorAcceptAwaitable(std::shared_ptr<ListeningSocket> socket)
-      : socket_{std::move(socket)} {}
-  auto operator co_await() {
-    struct Awaiter {
-      ProactorAcceptAwaitable &awaitable;
-      Result<ConnectedSocket> result{};
-
-      bool await_ready() const noexcept { return false; }
-      void await_suspend(std::coroutine_handle<> handle) noexcept {
-        awaitable.socket_->accept(nullptr, nullptr,
-                                  [this, handle](Result<ConnectedSocket> res) {
-                                    result = std::move(res);
-                                    handle.resume();
-                                  });
-      }
-      Result<ConnectedSocket> await_resume() { return std::move(result); }
-    };
-    return Awaiter{*this};
-  }
-
-private:
-  std::shared_ptr<ListeningSocket> socket_;
-};
+inline auto coroAccept(std::shared_ptr<ListeningSocket> socket,
+                       sockaddr *addr = nullptr, socklen_t *addrLen = nullptr) {
+  return AsyncAwaitable<ListeningSocket, ConnectedSocket, sockaddr *,
+                        socklen_t *>{socket, &ListeningSocket::accept, addr,
+                                     addrLen};
+}
 } // namespace Asio

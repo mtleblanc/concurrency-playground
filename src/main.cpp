@@ -143,8 +143,7 @@ Task proactor_coro_send_all(std::shared_ptr<ConnectedSocket> conn,
                             std::string &buf) {
 
   for (auto sv = std::string_view{buf}; !sv.empty();) {
-    auto writeResult =
-        co_await ProactorWriteAwaitable(conn, sv.data(), std::ssize(sv));
+    auto writeResult = co_await coroWrite(conn, sv.data(), std::ssize(sv));
     if (!writeResult) {
       std::println("{}", writeResult.error().message());
     }
@@ -157,8 +156,7 @@ AsioCoroutine proactor_coro_echo(ConnectedSocket socket) {
   auto conn = std::make_shared<ConnectedSocket>(std::move(socket));
   for (;;) {
     buf.resize(BUFSZ);
-    auto readResult =
-        co_await ProactorReadAwaitable{conn, buf.data(), std::ssize(buf)};
+    auto readResult = co_await coroRead(conn, buf.data(), std::ssize(buf));
     if (!readResult) {
       std::println("{}", readResult.error().message());
       continue;
@@ -174,7 +172,7 @@ AsioCoroutine proactor_coro_echo(ConnectedSocket socket) {
 AsioCoroutine proactor_coro_listen(std::shared_ptr<ListeningSocket> listserv) {
 
   for (;;) {
-    auto socket = co_await ProactorAcceptAwaitable{listserv};
+    auto socket = co_await coroAccept(listserv);
     if (!socket) {
       std::println("{}", socket.error().message());
       continue;
